@@ -1,0 +1,6 @@
+.venv*/
+__pycache__/
+*.pyc
+*.pyo
+*.tmp
+bench/artifacts/raw_capture.bin

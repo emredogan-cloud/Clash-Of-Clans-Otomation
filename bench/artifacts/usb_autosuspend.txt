@@ -1,0 +1,35 @@
+Phase 0 USB autosuspend probe
+=============================
+
+Test: leave device idle for 5 minutes (no ADB traffic), then verify
+`adb devices` still reports `device`.
+
+PRE-IDLE  : 2026-05-20T04:44:46+03:00
+            adb devices: device (jfzxugsgnnvsrsg6 @ 7-2 USB 480 Mbps)
+            power/control = on
+            power/runtime_status = active
+            power/autosuspend_delay_ms = -1000  (kernel default; no autosuspend)
+
+SLEEP 305s.
+
+POST-IDLE : 2026-05-20T04:50:41+03:00
+            adb devices: device (jfzxugsgnnvsrsg6 @ 7-2 USB 480 Mbps)
+            power/control = on
+            power/runtime_status = active
+            power/autosuspend_delay_ms = -1000
+
+VERDICT   : PASS. No USB autosuspend on this host/device pair. The Linux
+            kernel keeps `power/control=on` for this USB device class by
+            default; `adb devices` continues to report the device. No
+            tuning of /sys/bus/usb/devices/.../power/control is needed
+            on this hardware.
+
+Notes     : During the initial environment scan the device was observed
+            at /sys/bus/usb/devices/3-3.3 negotiated at 12 Mbps (USB 1.1
+            Full Speed) because the device was at that moment plugged
+            through an intermediate full-speed hub (a keyboard's
+            built-in USB hub). After re-plugging into a direct USB 2.0
+            port, the device renegotiated at 480 Mbps. Operators MUST
+            connect the phone to a port that exposes the device at
+            high speed (480 Mbps) or higher; benchmarks captured on a
+            12 Mbps link will be ~40x slower for raw screencap.

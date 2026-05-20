@@ -1,0 +1,4 @@
+device_serial,device_model,usb_speed,host_cpu,host_kernel,bench_version,mode,iters,warmup,frame_w,frame_h,frame_channels,mean_ms,median_ms,p95_ms,p99_ms,stdev_ms,min_ms,max_ms,failures
+jfzxugsgnnvsrsg6,22095RA98C,480 Mbps,AMD Ryzen 5 5500,6.17.0-23-generic,phase0-2026-05-20,A_screencap_pull,200,3,1080,2408,3,1347.595,1359.303,1464.163,1564.304,79.689,1157.417,1636.066,0
+jfzxugsgnnvsrsg6,22095RA98C,480 Mbps,AMD Ryzen 5 5500,6.17.0-23-generic,phase0-2026-05-20,B_exec_out_png,200,3,1080,2408,3,1318.936,1311.615,1400.005,1554.471,66.752,1199.628,1652.786,0
+jfzxugsgnnvsrsg6,22095RA98C,480 Mbps,AMD Ryzen 5 5500,6.17.0-23-generic,phase0-2026-05-20,C_exec_out_raw,200,3,1080,2408,3,936.021,946.980,994.290,1011.845,60.170,649.878,1033.901,0

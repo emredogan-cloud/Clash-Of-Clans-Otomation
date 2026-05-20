@@ -1,0 +1,15 @@
+Phase 0 raw screencap header probe
+==================================
+
+buffer_size_bytes : 10402576
+first_16_bytes_hex: 38 04 00 00 68 09 00 00 01 00 00 00 01 00 00 00
+
+Decoded under documented Android 9+ layout (LE uint32):
+  [0..3]   width        = 1080
+  [4..7]   height       = 2408
+  [8..11]  pixel_format = 1  (PIXEL_FORMAT_RGBA_8888)
+  [12..15] colorspace   = 1  (UNKNOWN)
+
+expected len with 16-byte header (RGBA_8888): 10402576
+expected len with 12-byte header (pre-A9):    10402572
+CONCLUSION: 16-byte header (Android 9+), RGBA_8888 — matches documented layout.

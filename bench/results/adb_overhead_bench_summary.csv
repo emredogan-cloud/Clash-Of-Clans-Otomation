@@ -1,0 +1,2 @@
+device_serial,device_model,usb_speed,host_cpu,host_kernel,bench_version,iters,warmup,mean_ms,median_ms,p95_ms,p99_ms,stdev_ms,min_ms,max_ms
+jfzxugsgnnvsrsg6,22095RA98C,480 Mbps,AMD Ryzen 5 5500,6.17.0-23-generic,phase0-2026-05-20,200,3,27.749,28.040,30.439,32.701,2.569,16.885,41.819
