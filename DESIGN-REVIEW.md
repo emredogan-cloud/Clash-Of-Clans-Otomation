@@ -66,15 +66,36 @@ Stated in §2.2. Adding multi-device is a re-architecture, not a refactor. The o
 
 ## 2. Unresolved technical risks
 
-### 2.1 Phase 0 measurements have not been taken (INVESTIGATE)
+### 2.1 Phase 0 measurements have not been taken (~~INVESTIGATE~~ RESOLVED 2026-05-20)
+
+> **Update 2026-05-20:** Phase 0 measurements complete. See
+> [phase-0-report.md](./phase-0-report.md). Several latency NFRs were
+> revised in [docs/frozen_nfrs_v1.md](./docs/frozen_nfrs_v1.md); see
+> also [ADR-01a](./ADR.md#adr-01a--screenshot-pipeline-phase-0-reality-content-dependent-ordering-usb-link-speed-prerequisite).
+> The new Phase-0 discoveries are catalogued in §9 below.
 
 The latency budget (§3.1 of SYSTEM-ROADMAP) consists of **engineering estimates**, not measurements. Phase 0 will validate them. Until that report lands, the NFRs are aspirational. The strongest possible statement we can make about v1 performance today is: *it should work, given the structural costs of the chosen pipeline*. We cannot promise the numbers in §3.1 without measuring on the operator's hardware.
 
-### 2.2 USB power management is operator-dependent (INVESTIGATE)
+### 2.2 USB power management is operator-dependent (~~INVESTIGATE~~ RESOLVED for this host 2026-05-20)
+
+> **Update 2026-05-20:** Phase 0's 5-minute idle test confirms
+> `adb devices` continues to report the device with no autosuspend
+> remediation needed on Ubuntu 24.04 / kernel 6.17. `power/control=on`
+> is the kernel default for this device class on this host. The
+> general concern remains valid for *laptops* with more aggressive
+> power management policies — those operators may still need to
+> disable autosuspend, but the operator's current host does not.
 
 Some Linux distributions, especially on laptops, aggressively autosuspend USB devices to save power. ADB will reconnect on resume, but the latency to detect "device is back" can be tens of seconds. The framework's RECONNECTING path handles this, but the operator's experience under aggressive autosuspend has not been measured. Phase 0 includes a check; if it fails, the operator must disable autosuspend on the device's USB port, which adds an operator setup step.
 
-### 2.3 Raw screencap header format on uncommon devices (INVESTIGATE)
+### 2.3 Raw screencap header format on uncommon devices (~~INVESTIGATE~~ PARTIALLY RESOLVED 2026-05-20)
+
+> **Update 2026-05-20:** Phase 0 verifies the documented 16-byte
+> Android 9+ layout (width, height, format=1 / RGBA_8888, colorspace)
+> on the Xiaomi 22095RA98C (Android 13). Buffer round-trips to
+> `16 + W * H * 4` exactly. See [phase-0-report.md §6](./phase-0-report.md).
+> The wider concern for *other* OEMs remains; that part is still
+> INVESTIGATE for future operators on different hardware.
 
 The documented header is `uint32 width, uint32 height, uint32 format[, uint32 colorSpace]`. We trust this on Pixel, Samsung, Xiaomi, and OnePlus devices, where it has been observed in the wild. We have not verified it on every OEM. A device that ships with a non-standard header will fall back to PNG mode (slower) but should not fail outright. The Phase 0 report must include a documented header layout for the operator's specific device.
 
@@ -219,23 +240,32 @@ For the team executing the phases, before locking in significant work:
 
 Ordered by approximate priority, top first. None are committed; this is a starting list for v1.1 planning.
 
-| # | Item | Source | Estimated effort |
-|---|------|--------|------------------|
-| 1 | Manifest versioning (§1.6) | self | S |
-| 2 | Disk-space circuit breaker for logs (in addition to artifacts) | adversarial review §13.5 of SYSTEM-ROADMAP | S |
-| 3 | Log throttling for flapping events (§13.2) | adversarial review | S |
-| 4 | `automation tools template-new` interactive CLI (§3.1) | self | M |
-| 5 | "Screen" abstraction above templates (§1.4) | self | M |
-| 6 | `StablePredicate` for "wait for animation to settle" (§1.5) | self | S |
-| 7 | Live screen-capture explorer for debugging (§3.2) | self | M |
-| 8 | Concurrent-adb-user detection (§2.6) | self | S |
-| 9 | Mask authoring helper (frame-diff-based animated-pixel detector) (§3.1) | self | M |
-| 10 | OEM ROM coverage in replay corpus (§5.4) | self | S–M |
-| 11 | Optional HTTP endpoint for metrics (§4.6) | self | S |
-| 12 | OCR add-on as a focused tool, not a primary matcher (§5.3 of SYSTEM-ROADMAP) | self | M |
-| 13 | Multi-resolution reference support (§1.2) | self | L |
-| 14 | Multi-device per host (§1.7) | self | XL |
-| 15 | A small TUI / web operator console (§13.4 of SYSTEM-ROADMAP) | self | M |
+Tags:
+- **v1.0** — should land in v1.0 (Phase 1–8), not v1.1
+- **v1.1** — landed in v1.1 (post-v1.0)
+- **future** — beyond v1.1; deferred indefinitely
+
+| # | Tag | Item | Source | Estimated effort |
+|---|---|------|--------|------------------|
+| 1 | v1.1 | Periodic runtime USB link-speed re-check (the bootstrap-time check lands in v1.0; this covers mid-run link degradation) | Phase 0.5 §9.1 | S |
+| 2 | v1.1 | `sensor.mode = "auto"` enabled by default + A/B sampler hysteresis tuning (Phase 0.5 ships behind a feature flag) | Phase 0.5 §9.2 / ADR-01a | M |
+| 3 | v1.1 | Manifest versioning (§1.6) | self | S |
+| 4 | v1.1 | Disk-space circuit breaker for logs (in addition to artifacts) | adversarial review §13.5 of SYSTEM-ROADMAP | S |
+| 5 | v1.1 | minicap escalation path documented + tested for high-tick-rate operators | Phase 0.5 §9.4 | M |
+| 6 | v1.1 | Log throttling for flapping events (§13.2) | adversarial review | S |
+| 7 | v1.1 | `automation tools template-new` interactive CLI (§3.1) | self | M |
+| 8 | v1.1 | "Screen" abstraction above templates (§1.4) | self | M |
+| 9 | v1.1 | `StablePredicate` for "wait for animation to settle" (§1.5) | self | S |
+| 10 | v1.1 | Device-side `screencap` composition cost measurement (`adb shell time screencap`) | Phase 0.5 §9.5 | S |
+| 11 | v1.1 | Live screen-capture explorer for debugging (§3.2) | self | M |
+| 12 | v1.1 | Concurrent-adb-user detection (§2.6) | self | S |
+| 13 | v1.1 | Mask authoring helper (frame-diff-based animated-pixel detector) (§3.1) | self | M |
+| 14 | v1.1 | OEM ROM coverage in replay corpus (§5.4) | self | S–M |
+| 15 | v1.1 | Optional HTTP endpoint for metrics (§4.6) | self | S |
+| 16 | v1.1 | OCR add-on as a focused tool, not a primary matcher (§5.3 of SYSTEM-ROADMAP) | self | M |
+| 17 | future | Multi-resolution reference support (§1.2) | self | L |
+| 18 | future | Multi-device per host (§1.7) | self | XL |
+| 19 | future | A small TUI / web operator console (§13.4 of SYSTEM-ROADMAP) | self | M |
 
 ---
 
@@ -256,7 +286,114 @@ For the record, so they are not re-debated later without new information:
 
 ---
 
-## 9. Closing position
+## 9. Phase 0 discoveries (added 2026-05-20)
+
+This section is **additive** — added during Phase 0.5 Spec Lock to
+catalogue concerns surfaced by Phase 0 measurements that the
+pre-Phase-0 dossier did not anticipate. Each entry is positioned (per
+the document's convention) MITIGATE / ACCEPT / DEFER / INVESTIGATE.
+
+### 9.1 USB topology risk — silent 12 Mbps hub failure (MITIGATE)
+
+**Discovery (VF):** Phase 0 first observed the operator's device
+negotiated at 12 Mbps (USB 1.1 Full Speed) because the cable was
+plugged through a keyboard's built-in USB hub. After re-plugging
+directly into a USB 2.0 high-speed port, the device renegotiated at
+480 Mbps. The 12 Mbps state would have multiplied screencap latency
+by ~40× silently — no error, just a 40× slower framework.
+
+**Position — MITIGATE.** Phase 1 `bootstrap.sh` SHALL read
+`/sys/bus/usb/devices/<path>/speed` for the connected device and
+refuse to start (or warn loudly) if the link is below 480 Mbps. See
+[ADR-01a §Decision (5)](./ADR.md#adr-01a--screenshot-pipeline-phase-0-reality-content-dependent-ordering-usb-link-speed-prerequisite),
+[SYSTEM-ROADMAP §5.1.7](./SYSTEM-ROADMAP.md#517-usb-link-speed-validation-phase-05-addition),
+and `PHASE-MASTER-PROMPTS.md` Phase 1 (updated).
+
+**Residual concern (v1.1):** the link speed could drop *after* a
+successful bootstrap if the operator unplugs and replugs into a
+slower port mid-run. Bootstrap-time check does not catch this. A
+periodic runtime re-check is captured as v1.1 backlog row #1.
+
+### 9.2 Entropy-dependent screencap ordering (ACCEPT)
+
+**Discovery (VF):** PNG-vs-raw ordering reverses with screen content
+on this hardware. On low-entropy screens (homescreen-like, ~500 KB
+PNG payload) PNG is ~450 ms faster than raw. On high-entropy screens
+(~1.4 MB PNG payload) raw is ~360 ms faster than PNG. The fastest
+mode depends on the target app's hot screens.
+
+**Position — ACCEPT.** ADR-01a documents this and provides a
+configuration knob (`sensor.mode`). Default `"raw"` because raw is
+content-deterministic; operators on low-entropy UIs are documented to
+override.
+
+**Residual concern (v1.1):** the `auto` mode that A/B-samples and
+switches dynamically is small code (~50 LOC) but has not been
+soak-tested. ADR-01a ships it behind a feature flag in v1.0; v1.1
+should enable by default once Phase 8 confirms behavior.
+
+### 9.3 Mandatory ROI discipline for hot-path templates (MITIGATE)
+
+**Discovery (VF):** full-frame BGR matching takes 137.9 ms median per
+template on this hardware. At 8 templates per tick the framework
+spends 1.1 s in matching alone, exceeding the MATCHING state's 500 ms
+timeout. Full-frame grayscale (33.6 ms) and ROI variants (2.2–7.0 ms)
+are within budget.
+
+**Position — MITIGATE.** Phase 3's manifest loader will WARN on
+hot-path templates that omit a ROI hint. ADR-03 received a Phase-0.5
+clarification note (preserved as a status block; ADR text unchanged).
+Operators may still author full-frame BGR templates but must opt in
+with an explicit metadata flag (`full_frame: true`) and accept the
+per-state timeout implications.
+
+**Residual concern:** none in v1.0. Phase 3's manifest validation
+closes this.
+
+### 9.4 Revised throughput expectations (ACCEPT)
+
+**Discovery (VF):** sustained tick rate of 2–5 Hz is unachievable on
+this hardware with `adb exec-out screencap`. Realistic v1.0 tick rate
+is 0.5–1 Hz.
+
+**Position — ACCEPT.** NFRs frozen at the new numbers; see
+[docs/frozen_nfrs_v1.md §1](./docs/frozen_nfrs_v1.md). Operators
+requiring higher tick rates have two paths:
+1. Switch to minicap (deferred per ADR-01; Phase 8 may revisit).
+2. Use a USB 3.x-capable device on a USB 3.x host (operator-side,
+   no framework change required).
+
+**Residual concern (v1.1):** if operators consistently want higher
+tick rates, prioritize minicap as a Phase 8 follow-up. Backlog row #5.
+
+### 9.5 Device-side `screencap` composition cost (INVESTIGATE)
+
+**Discovery (UE):** raw screencap on the operator's device takes
+~947 ms median while the USB transport floor for 10.4 MB at 260 Mbps
+is ~324 ms. The implied ~620 ms is device-side `screencap`
+composition cost (the device's `screencap` binary rendering and
+serializing the framebuffer on each invocation). Not directly
+measured.
+
+**Position — INVESTIGATE.** A targeted experiment (`adb shell time
+screencap > /sdcard/x.raw`) would pin down the device-side number.
+This does not change v1.0 architecture but informs the realistic
+upper bound on what any pipeline change could buy. Backlog row #10.
+
+### 9.6 Phase 0 confirmed no remediation needed (ACCEPT)
+
+For the operator's specific host + device pair, Phase 0 confirmed:
+
+- USB autosuspend does not engage with kernel defaults (§2.2).
+- Raw screencap header layout matches the documented format (§2.3).
+- ADB subprocess latency is at the *better* end of the 30–80 ms
+  engineering range (28 ms median; §2.2 of ADR.md).
+
+These are documented as **resolved** rather than residual concerns.
+
+---
+
+## 10. Closing position
 
 The architecture, as documented, is a defensible v1 design. Its weaknesses are known, its assumptions are labeled, and its deferral list is real and acknowledged. The team should expect:
 

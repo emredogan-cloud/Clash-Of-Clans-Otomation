@@ -144,17 +144,25 @@ sequenceDiagram
     ORCH->>OBS: tick_end(tick_id, duration, results)
 ```
 
-**Latency budget (engineering estimates, USB 2.0, mid-tier host):**
+**Latency budget — OLD (pre-Phase-0 estimates) vs NEW (Phase-0
+measured, operator hardware):**
 
-| Step | Estimated wall-clock | Source of cost |
-|------|----------------------|----------------|
-| Capture round trip (steps 3–7) | 80–250 ms | USB + screencap |
-| Parse + convert + resample (step 8) | 5–15 ms | CPU |
-| Template matching (step 12) | 5–50 ms × N templates | CPU |
-| Action round trip (steps 17–22) | 80–200 ms | USB + `input` JVM bootstrap |
-| **Total per tick** | **~200–500 ms** typical | — |
+| Step | OLD estimate | NEW measured (operator) | Source of cost |
+|------|--------------|--------------------------|----------------|
+| Capture round trip (steps 3–7) | 80–250 ms | **947 ms (raw, content-deterministic)** / 578–1311 ms (PNG, content-dependent) | USB transport + device-side `screencap` composition |
+| Parse + convert + resample (step 8) | 5–15 ms | UE — within range; Phase 2 microbench will confirm | CPU |
+| Template matching (step 12) | 5–50 ms × N templates | **2.2 ms (ROI gray) / 7.0 (ROI BGR) / 33.6 (full gray) / 137.9 (full BGR)** per template | CPU |
+| Action round trip (steps 17–22) | 80–200 ms | UE — Phase 4 measures; ADB shell overhead alone is 28 ms median (VF) | USB + `input` JVM bootstrap |
+| **Total per tick (default templates, ROI discipline)** | **~200–500 ms** typical | **~1.0–1.5 s** typical (UE) | — |
 
-These are estimates from structural costs; Phase 0 produces measured numbers.
+Source: [phase-0-report.md](../phase-0-report.md) §3, §4, §5;
+[docs/frozen_nfrs_v1.md](../docs/frozen_nfrs_v1.md). USB 2.0 host
+(operator does not have a USB 3.x device).
+
+The OLD column is preserved for historical traceability. The NEW
+column is what an implementer or operator should plan against. v1.0
+frozen NFRs live in `docs/frozen_nfrs_v1.md`; v1.0 tick rate is
+0.5–1 Hz, not the pre-Phase-0 2–5 Hz.
 
 ---
 
@@ -338,6 +346,13 @@ flowchart TB
 ```
 
 **Reading guide.** Fallback from primary to PNG is automatic on header parse failure, but it is logged and exposed as a metric so that operators see when fallback is engaging frequently — a signal that the header parser needs an update for a new device profile.
+
+**Phase 0.5 additions.**
+
+- **Mode is configurable.** `sensor.mode = "raw" | "png" | "pull" | "auto"` (see [ADR-01a](../ADR.md#adr-01a--screenshot-pipeline-phase-0-reality-content-dependent-ordering-usb-link-speed-prerequisite)). Default `"raw"` because raw latency is content-deterministic; operators on low-entropy UIs may override to `"png"` for ~450 ms faster captures.
+- **Content-dependent ordering.** Raw and PNG modes have measured medians that reverse with screen content. Raw is ~947 ms regardless of content; PNG is ~578 ms on low-entropy screens and ~1311 ms on high-entropy screens. The pipeline diagram is the same; the mode selection knob is in config.
+- **USB link-speed prerequisite.** The pipeline assumes the device is connected at ≥ 480 Mbps. Phase 1's `bootstrap.sh` validates this; see [SYSTEM-ROADMAP §5.1.7](../SYSTEM-ROADMAP.md#517-usb-link-speed-validation-phase-05-addition). A USB 1.1 (12 Mbps) link would multiply capture latency by ~40× and is treated as a startup failure.
+- **Device-side composition cost.** Raw screencap latency (~947 ms) is decomposed as ~324 ms USB transport (10.4 MB / 260 Mbps) + ~620 ms device-side `screencap` composition. The composition cost is *not* addressable by switching modes; it is the cost of the device's `screencap` binary rendering the framebuffer per call.
 
 ---
 

@@ -30,7 +30,7 @@ The framework automates interaction with the Android UI from a Linux desktop, us
 - **THINK** — OpenCV normalized template matching with masks, multi-scale fallback, and a resolution-independent reference frame (ADR-03/04/05);
 - **ACT** — `adb shell input` for taps/swipes/keys, with bounded jitter for robustness (ADR-06/15).
 
-The design optimizes for **stability, observability, and long-run operability**, not peak FPS. Target tick rate is 2–5 Hz with end-to-end latency of 200–500 ms (uncertain estimate, validated in Phase 0). The framework is a single Python process supervised by an external watchdog, with a formal state machine as the orchestrator and a recorded-trace replay harness as the primary integration-test surface.
+The design optimizes for **stability, observability, and long-run operability**, not peak FPS. Target tick rate is **0.5–1 Hz** with end-to-end tick latency **~1.0–1.5 s median** on the operator's hardware (USB 2.0 host, Xiaomi 22095RA98C / Android 13). These numbers were originally projected as 2–5 Hz / 200–500 ms but were revised down by Phase 0 measurements; see [docs/frozen_nfrs_v1.md](./docs/frozen_nfrs_v1.md) for the v1.0 frozen NFRs and [ADR-01a](./ADR.md#adr-01a--screenshot-pipeline-phase-0-reality-content-dependent-ordering-usb-link-speed-prerequisite) for the screenshot-pipeline reality check. The framework is a single Python process supervised by an external watchdog, with a formal state machine as the orchestrator and a recorded-trace replay harness as the primary integration-test surface.
 
 The system is designed as a **generic UI automation framework**, with games and game-like interfaces as a reference use case. Use against any specific application is subject to that application's terms of service, which the framework cannot itself enforce and does not attempt to circumvent. Risk relating to ToS, account standing, and detection is discussed neutrally in §10 and is the operator's responsibility.
 
@@ -74,26 +74,39 @@ The system is designed as a **generic UI automation framework**, with games and 
 
 ## 3. Non-functional requirements
 
-Each requirement is stated as a target, a unit, and an evaluation method. Targets are **engineering estimates** unless otherwise noted; they will be revised once Phase 0 measurements land.
+Pre-Phase-0 targets were **engineering estimates**. After Phase 0
+(see [phase-0-report.md](./phase-0-report.md)), several were revised;
+the frozen v1.0 numbers live in [docs/frozen_nfrs_v1.md](./docs/frozen_nfrs_v1.md)
+and that document is authoritative where this section differs. Tables
+below preserve both the OLD (pre-Phase-0) and the NEW (v1.0 frozen)
+columns so the historical reasoning is auditable.
 
 ### 3.1 Performance
 
-| NFR | Target | Unit | Evaluation |
-|-----|--------|------|-----------|
-| Tick latency (median) | ≤ 500 ms | ms, end-to-end SENSE→ACT | Phase 0 microbench |
-| Tick latency (p95) | ≤ 900 ms | ms | Phase 0 microbench |
-| Screenshot capture (median) | ≤ 250 ms | ms | SENSE microbench |
-| Per-template match cost (median) | ≤ 25 ms | ms, 1080×1920 frame, full screen | THINK microbench |
-| Sustained tick rate (default) | 2–5 | Hz | Phase 0 |
-| Concurrent template matches per tick | ≤ 8 (default), 20 (cap) | count | configuration |
+| NFR | OLD (pre-Phase-0) | v1.0 frozen | Δ | Evaluation |
+|-----|-------------------|-------------|---|-----------|
+| Tick latency (median) | ≤ 500 ms | **≤ 1500 ms** | 3× worse | end-to-end SENSE→ACT; Phase 5/7 soak |
+| Tick latency (p95) | ≤ 900 ms | **≤ 2000 ms** | 2.2× worse | Phase 5/7 soak |
+| Screenshot capture (median) | ≤ 250 ms | **≤ 1000 ms (raw)** / ≤ 1500 ms across modes | 4–6× worse | Phase 0 ✓ |
+| Per-template match cost (median) | ≤ 25 ms (full screen) | **tier-split**: ≤ 5 ms (ROI gray), ≤ 10 ms (ROI BGR), ≤ 50 ms (full-frame gray); full-frame BGR opt-in only | tier-split | Phase 0 ✓ + Phase 3 |
+| Sustained tick rate (default) | 2–5 Hz | **0.5–1 Hz** | 4–10× worse | Phase 0 floor; Phase 7 soak |
+| Concurrent template matches per tick | ≤ 8 default, 20 cap | ≤ 8 default (ROI-required), 20 cap (opt-in) | tightened on ROI | configuration |
+| **USB link speed at bootstrap (new)** | — | **≥ 480 Mbps** | new NFR | Phase 1 bootstrap |
+
+> **Why the regression**: USB transport floor + device-side `screencap`
+> composition cost dominate. See [phase-0-report.md §3](./phase-0-report.md)
+> and [ADR-01a](./ADR.md#adr-01a--screenshot-pipeline-phase-0-reality-content-dependent-ordering-usb-link-speed-prerequisite).
+> The regression is hardware-bound on this device class; minicap or
+> scrcpy frame intercept (deferred per ADR-01) would beat it but at
+> higher operational cost.
 
 ### 3.2 Resource usage
 
 | NFR | Target | Notes |
 |-----|--------|-------|
-| RAM (steady state) | ≤ 300 MB | Engineering assumption. Frames are short-lived; manifest in memory. |
+| RAM (steady state) | ≤ 300 MB | Engineering assumption. Frames are short-lived; manifest in memory. Native raw frame is 10.4 MB on the operator's 1080×2408 device; resampled to reference (1080×1920) is 6.2 MB. |
 | RAM (artifact spike) | ≤ 600 MB | When writing debug artifacts. |
-| CPU (single core, steady state) | ≤ 30% | Mid-tier host, 1080×1920 frames, default template set. |
+| CPU (single core, steady state) | ≤ 30% (with ROI discipline); ≤ 60% if full-frame templates are present | Mid-tier host. ROI discipline mandatory per ADR-03 Phase-0.5 clarification; see [docs/frozen_nfrs_v1.md §2](./docs/frozen_nfrs_v1.md). |
 | Disk write (logs + metrics) | ≤ 50 MB / day | Logs at default verbosity. |
 | Disk write (artifacts under load) | ≤ 500 MB / day, rotation-capped | Hard cap by rotator. |
 
@@ -183,9 +196,22 @@ ADB exposes a client–server architecture: the `adb` binary on the host is both
 
 #### 5.1.2 Engineering implications
 
-- ADB subprocess spawn cost is **~30–80 ms** per command on Linux (engineering assumption, varies by hardware). This is non-trivial relative to the tick budget.
+- ADB subprocess spawn cost is **~30–80 ms across hardware**
+  (engineering range). The operator's host measured **28 ms median**
+  (`adb shell echo hi`, 200 iter, USB 480 Mbps; VF). Operators on
+  slower hosts will sit higher in the range. See
+  [phase-0-report.md §5](./phase-0-report.md).
 - The adb server is a *separate* OS process and a long-lived daemon. It is not part of our framework but its lifecycle affects us — restart of the host or `adb kill-server` will require the framework to detect and recover.
-- USB 2.0 (480 Mbps theoretical, ~300 Mbps practical) bounds frame throughput. A 1080×1920×4 raw frame is 8.3 MB; at 300 Mbps that's ~220 ms transport floor on USB 2.0. USB 3.0 brings this down to ~30 ms. **Phase 0 must determine which USB tier the operator is using and bench accordingly.**
+- USB 2.0 high-speed delivers **~260 Mbps practical** on the operator's
+  host (10 MB blob via `adb pull`; VF). On a 1080×2408 device the raw
+  framebuffer is **10.4 MB**; at 260 Mbps that's a **~324 ms USB
+  transport floor**. Add ~600 ms of device-side `screencap`
+  composition cost (inferred from `exec-out screencap` median minus
+  the transport floor) and the raw screencap mode lands at ~947 ms
+  median (VF). USB 3.0 would bring the transport floor below 100 ms
+  but the operator's device does not expose a USB 3.x port. **Phase 0
+  determined this USB tier and the resulting bench numbers; see
+  [ADR-01a](./ADR.md#adr-01a--screenshot-pipeline-phase-0-reality-content-dependent-ordering-usb-link-speed-prerequisite).**
 
 #### 5.1.3 Limitations
 
@@ -226,23 +252,51 @@ We choose `svc power stayon usb` as the baseline because it is the simplest and 
 
 This sequence is sufficient for the common failure modes we expect.
 
+#### 5.1.7 USB link-speed validation (Phase 0.5 addition)
+
+A USB hub between the host and the device can silently negotiate the
+link down to USB 1.1 full-speed (12 Mbps), reducing effective
+screencap throughput by ~40×. Phase 0 observed this on the operator's
+hardware before the cable was replugged into a USB 2.0 high-speed
+port. Without an explicit check, an operator could waste hours
+diagnosing what looks like a framework regression.
+
+Phase 1's `bootstrap.sh` SHALL therefore:
+
+1. After `adb devices` confirms a connected device, resolve the
+   device's USB sysfs path by walking `/sys/bus/usb/devices/*` and
+   matching the `serial` attribute.
+2. Read `/sys/bus/usb/devices/<path>/speed`.
+3. Accept `480` (USB 2.0 HS) or any of `5000` / `10000` / `20000` (USB
+   3.x SuperSpeed). Log at INFO and proceed.
+4. On `12` (USB 1.1 FS) or `1.5` (low-speed): WARN with remediation
+   ("device is plugged through a full-speed hub; replug directly into
+   a USB 2.0 high-speed port") and exit non-zero.
+5. On sysfs path not resolvable: WARN ("cannot verify USB link speed")
+   and proceed.
+
+The link-speed NFR is frozen at ≥ 480 Mbps. See
+[docs/frozen_nfrs_v1.md §5](./docs/frozen_nfrs_v1.md) and
+[ADR-01a §Decision (5)](./ADR.md#adr-01a--screenshot-pipeline-phase-0-reality-content-dependent-ordering-usb-link-speed-prerequisite).
+
 ### 5.2 Screenshot pipeline (SENSE)
 
-Detailed in [ADR-01](./ADR.md#adr-01--screenshot-pipeline-adb-exec-out-screencap-raw-as-primary) and the SENSE pipeline diagram in [§7 of ARCHITECTURE-DIAGRAMS.md](./ARCHITECTURE-DIAGRAMS.md#7-subsystem-internal--sense-pipeline-detail). The key points:
+Detailed in [ADR-01](./ADR.md#adr-01--screenshot-pipeline-adb-exec-out-screencap-raw-as-primary), [ADR-01a](./ADR.md#adr-01a--screenshot-pipeline-phase-0-reality-content-dependent-ordering-usb-link-speed-prerequisite), and the SENSE pipeline diagram in [§7 of ARCHITECTURE-DIAGRAMS.md](./ARCHITECTURE-DIAGRAMS.md#7-subsystem-internal--sense-pipeline-detail). The key points:
 
-- **Primary mode:** `adb exec-out screencap` raw framebuffer. Parse header → read pixels → RGBA→BGR.
-- **Fallback mode:** `adb exec-out screencap -p` PNG. `cv2.imdecode`.
-- **Format detection** is automatic on first capture per session; the chosen mode is sticky for the session.
+- **Primary mode:** `adb exec-out screencap` raw framebuffer. Parse header → read pixels → RGBA→BGR. Default. Latency is content-deterministic (~947 ms median on the operator's hardware; VF).
+- **Configurable modes:** `sensor.mode = "raw" | "png" | "pull" | "auto"` (ADR-01a §Decision). PNG is recommended for low-entropy target UIs.
+- **Fallback policy:** if the raw header parser fails (unknown format), the framework switches to PNG for the rest of the session and emits a metric.
+- **Format detection** runs on the first capture per session; the chosen mode is sticky for the session unless `auto` switches based on A/B sampling.
 - **Resampling** to reference resolution (ADR-04) happens inside SENSE so downstream sees a uniform frame size.
 
-**Engineering benchmarks to perform in Phase 0:**
+**Phase 0 benchmark outcomes** (see [phase-0-report.md §3](./phase-0-report.md)):
 
-- raw vs PNG median latency over 200 captures
-- USB 2.0 vs USB 3.0 transport floor
-- whether `cv2.cvtColor(RGBA → BGR)` is fast enough or worth replacing with `frame[:, :, [2, 1, 0]]` indexing
-- whether `cv2.resize` with `INTER_AREA` (downsample) or `INTER_LINEAR` (upsample) is the appropriate interpolation
+- Raw vs PNG median latency over 200 captures: PNG-vs-raw ordering **reverses with screen content**. Raw is content-deterministic at ~947 ms median; PNG ranges from 578 ms (low-entropy) to 1311 ms (high-entropy). See ADR-01a.
+- USB 2.0 vs USB 3.0 transport floor: USB 2.0 measured at ~260 Mbps practical; USB 3.0 not benchmarked because the operator's device does not expose a USB 3.x port (documented limitation).
+- RGBA→BGR conversion: not directly microbenched in Phase 0 (the bench uses indexing via `cv2.cvtColor(RGBA → BGR)`). Phase 2 will compare `cv2.cvtColor` against `frame[:, :, [2, 1, 0]]` indexing.
+- `cv2.resize` interpolation: not directly microbenched; Phase 2 selects `INTER_AREA` (downsample) or `INTER_LINEAR` (upsample) per ADR-04.
 
-These results inform whether the latency NFRs in §3.1 are achievable on the operator's host.
+These results informed the v1.0 NFR freeze; see [docs/frozen_nfrs_v1.md](./docs/frozen_nfrs_v1.md).
 
 #### 5.2.1 Maintenance burden
 

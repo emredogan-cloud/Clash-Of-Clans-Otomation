@@ -86,13 +86,23 @@ You are implementing **Phase 0 — Research & feasibility** of the Android UI Au
 
 ## Phase 1 — Environment & ADB foundation
 
+> **Phase 0.5 reality sync (2026-05-20):** this prompt was updated to
+> reflect Phase 0 measurements, the frozen v1.0 NFRs, ADR-01a's
+> USB-link-speed validation requirement, and the revised latency
+> envelopes. The original prompt's scope, deliverables, and exit
+> criteria are intact; load-bearing additions are clearly marked
+> **(Phase 0.5)**.
+
 ### Master prompt
 
 You are implementing **Phase 1 — Environment & ADB foundation**. Read in full:
 
-- `SYSTEM-ROADMAP.md` §5.1, §6 (setup), §11 (FSM — for BOOTSTRAP, CONNECTING, FAULTED).
-- `ADR.md` ADR-07, ADR-11, ADR-13, ADR-16.
-- `phase-0-report.md` from the prior phase — confirm it locked the ADRs you are about to depend on. If any ADR is still open, stop and resolve.
+- `SYSTEM-ROADMAP.md` §3.1 (frozen NFRs), §5.1 (ADB incl. §5.1.7 USB link-speed validation), §6 (setup), §11 (FSM — for BOOTSTRAP, CONNECTING, FAULTED).
+- `ADR.md` ADR-01a (Phase-0.5 screenshot-pipeline revision; load-bearing for the bootstrap USB check), ADR-07, ADR-11, ADR-13, ADR-16.
+- `phase-0-report.md` from the prior phase — the measurements.
+- `docs/frozen_nfrs_v1.md` — the v1.0 NFR targets. Build against these, not the pre-Phase-0 estimates that may still appear in some sections of SYSTEM-ROADMAP for historical reference.
+- `docs/phase0_consistency_audit.md` — the catalogue of stale claims and where they were resolved.
+- `docs/phase1_readiness.md` — the gate review. **If this document does not say "READY", stop and resolve.**
 
 **Goal.** Produce a reproducible Python environment, a clean `ADBClient` wrapper, a device fingerprinting routine, systemd user units (framework + watchdog stub), and a `scripts/bootstrap.sh` that brings a fresh checkout to "device-ready" in one command. **No CV, no FSM logic beyond BOOTSTRAP and CONNECTING, no action engine, no observability beyond standard logging.**
 
@@ -136,13 +146,19 @@ You are implementing **Phase 1 — Environment & ADB foundation**. Read in full:
 **Concrete responsibilities.**
 
 1. `pyproject.toml` declaring the project, with `[project.dependencies]` initially listing only `numpy` (CV comes Phase 2). Python 3.11+. Use `uv` if available; fall back to `pip-tools`. Produce a deterministic lockfile committed alongside.
-2. `scripts/bootstrap.sh` — bash, idempotent. Verifies Python and `adb` versions; creates `./.venv/`; installs locked dependencies; creates `var/log`, `var/metrics`, `var/artifacts`, `var/run`; refuses to proceed on version mismatch with a clear error.
+2. `scripts/bootstrap.sh` — bash, idempotent. Verifies Python and `adb` versions; creates `./.venv/`; installs locked dependencies; creates `var/log`, `var/metrics`, `var/artifacts`, `var/run`; refuses to proceed on version mismatch with a clear error. **(Phase 0.5)** Also performs USB link-speed validation per `SYSTEM-ROADMAP.md §5.1.7`:
+   - After `adb devices` confirms a connected device with state `device`, walk `/sys/bus/usb/devices/*` to find the entry whose `serial` attribute matches the adb serial.
+   - Read that entry's `speed` file.
+   - If `speed` is `480` or higher → log INFO `USB link speed: ${speed} Mbps OK` and proceed.
+   - If `speed` is `12` (USB 1.1 FS) or `1.5` (USB LS) → log ERROR `USB link speed: ${speed} Mbps too slow — device is likely plugged through a full-speed hub. Replug directly into a USB 2.0 high-speed (or 3.x) port.` and exit non-zero.
+   - If the sysfs entry cannot be located → log WARN `cannot verify USB link speed (sysfs path not resolvable for serial ${serial})` and proceed.
+   - The check is wrapped so an absence of `/sys/bus/usb/devices` (e.g. an unusual container environment) does not break bootstrap.
 3. `automation/constants.py` — single source of truth for `REFERENCE_RESOLUTION = (1080, 1920)` and other architectural constants.
 4. `automation/config.py` — TOML loader implementing the layered config (ADR-13). Resolved config is a frozen dataclass. Includes a serializer that writes `var/run/effective-config.toml`.
 5. `automation/errors.py` — exception hierarchy: `AutomationError` (base), `ADBError`, `DeviceUnauthorizedError`, `DeviceNotFoundError`, `ConfigError`, `FingerprintError`.
 6. `automation/adb.py` — `ADBClient` class. Methods: `devices()`, `shell(cmd: list[str])`, `exec_out(cmd: list[str]) -> bytes`, `pull(remote: str, local: Path)`, `push(local: Path, remote: str)`, `wait_for_device(timeout: float)`, `kill_server()`, `start_server()`, plus a private `_run(args: list[str]) -> CompletedProcess`. All subprocess calls go through a bounded thread pool (`asyncio.to_thread` is fine). Output is parsed defensively; `adb devices` parsing tolerates extra header/footer lines.
-7. `automation/fingerprint.py` — `DeviceFingerprint` dataclass and a `fingerprint(adb: ADBClient) -> DeviceFingerprint` async function. Fields: `serial`, `model`, `android_version`, `sdk_int`, `resolution` (W, H), `orientation` (portrait/landscape). Resolution is parsed from `dumpsys window` and orientation from `dumpsys input` (or `settings get system user_rotation`). Includes a sanity check: refuses to fingerprint if `resolution` is missing or zero.
-8. `automation/cli/probe.py` — a CLI entry point: `python -m automation.cli probe`. Loads config, instantiates `ADBClient`, runs `devices()`, fingerprints, prints a human-readable summary, exits 0 on success and non-zero with a diagnostic on failure.
+7. `automation/fingerprint.py` — `DeviceFingerprint` dataclass and a `fingerprint(adb: ADBClient) -> DeviceFingerprint` async function. Fields: `serial`, `model`, `android_version`, `sdk_int`, `resolution` (W, H), `orientation` (portrait/landscape), **(Phase 0.5)** `usb_speed_mbps: int | None` (None when sysfs unavailable). Resolution is parsed from `dumpsys window` and orientation from `dumpsys input` (or `settings get system user_rotation`). USB speed is read from `/sys/bus/usb/devices/<path>/speed` resolved by matching the device's `serial` sysfs attribute. Includes a sanity check: refuses to fingerprint if `resolution` is missing or zero.
+8. `automation/cli/probe.py` — a CLI entry point: `python -m automation.cli probe`. Loads config, instantiates `ADBClient`, runs `devices()`, fingerprints, prints a human-readable summary **including the USB link speed**, exits 0 on success and non-zero with a diagnostic on failure. The summary explicitly highlights link speed below 480 Mbps in red/with a warning prefix.
 9. `systemd/automation.service` — user unit, type=`simple`, no `Restart=` (watchdog owns restart). Working directory = repo root. ExecStart = the framework's main entrypoint (stub for Phase 1; emits a "Phase 1 stub" log line and exits).
 10. `systemd/automation-watchdog.service` — user unit, type=`simple`. Phase 1 stub watchdog that simply logs once per minute that it is alive. Real watchdog logic lands in Phase 7.
 11. Tests:
@@ -162,6 +178,7 @@ You are implementing **Phase 1 — Environment & ADB foundation**. Read in full:
 **Testing.**
 
 - Unit tests use fixture strings for ADB output. Place fixtures in `tests/fixtures/adb/`.
+- **(Phase 0.5)** Unit tests for USB link-speed parsing use synthetic sysfs trees (e.g. via `tmp_path` fixtures that create a fake `/sys/bus/usb/devices/<x>/speed` and `serial` pair). Cover: `480` accepted, `12` rejected, missing `speed` file warned-then-proceeded, multiple-device sysfs disambiguated by serial.
 - Live tests (when `ADB_LIVE=1`): probe a real device, fingerprint, log results.
 - Tests run in CI as well as locally; CI invocation in a follow-up phase, but the tests must be CI-shaped today.
 
@@ -182,7 +199,8 @@ You are implementing **Phase 1 — Environment & ADB foundation**. Read in full:
 
 **Exit criteria.**
 
-- `git clone` → `bash scripts/bootstrap.sh` → `source .venv/bin/activate` → `python -m automation.cli probe` correctly prints device fingerprint on a connected device.
+- `git clone` → `bash scripts/bootstrap.sh` → `source .venv/bin/activate` → `python -m automation.cli probe` correctly prints device fingerprint **including USB link speed** on a connected device at ≥ 480 Mbps.
+- `bootstrap.sh` against a device at 12 Mbps (simulate by plugging through a USB 1.1 hub or by injecting a sysfs fixture in a unit test) exits non-zero with the documented remediation message.
 - All tests pass.
 - `mypy --strict` and `ruff check` clean.
 - systemd units install (`bootstrap.sh --install-service`) and uninstall (`--uninstall-service`) cleanly.
