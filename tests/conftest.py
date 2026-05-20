@@ -80,10 +80,18 @@ class SubprocessRecorder:
 
 @pytest.fixture
 def subprocess_recorder(monkeypatch: pytest.MonkeyPatch) -> SubprocessRecorder:
-    """Replace `automation.adb.subprocess.run` with a recorder."""
+    """Replace `automation.adb.subprocess.run` AND `automation.sensor.subprocess.run`
+    with a recorder so both layers see the same mocked calls."""
     rec = SubprocessRecorder()
     import automation.adb as adb_mod
     monkeypatch.setattr(adb_mod.subprocess, "run", rec)
+    # The sensor module also imports subprocess for the `pull` path.
+    # Patch lazily — only if sensor has been imported.
+    try:
+        import automation.sensor as sensor_mod
+        monkeypatch.setattr(sensor_mod.subprocess, "run", rec)
+    except ImportError:
+        pass
     # Also pin shutil.which so `ADB()` construction does not depend on
     # whether the real `adb` binary is on PATH inside the test runner.
     monkeypatch.setattr(adb_mod.shutil, "which", lambda name: f"/fake/path/{name}")

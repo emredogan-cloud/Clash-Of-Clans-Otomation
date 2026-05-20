@@ -36,3 +36,43 @@ class USBValidationError(BootstrapError):
     (keyboards, monitors, dock-style adapters) which silently
     downgrades the link to 12 Mbps. See `docs/frozen_nfrs_v1.md` §5.
     """
+
+
+# ---------------------------------------------------------------------------
+# SENSE layer (Phase 2)
+# ---------------------------------------------------------------------------
+
+
+class SensorError(AutomationError):
+    """Base class for all errors raised inside the SENSE pipeline."""
+
+
+class CaptureError(SensorError):
+    """An ADB capture invocation failed or returned no usable bytes.
+
+    Raised when `adb exec-out screencap` exits non-zero, times out,
+    returns an empty buffer, or when `pull` cannot retrieve the file.
+    Distinct from `FrameDecodeError` so callers can distinguish
+    transport faults from payload-format faults.
+    """
+
+
+class FrameDecodeError(SensorError):
+    """Failure decoding a screencap payload into a NumPy ndarray.
+
+    Raised when `cv2.imdecode` returns `None` on the PNG path, or when
+    the raw payload's declared dimensions disagree with its byte
+    length, or when the RGBA→BGR conversion fails. Header layout
+    issues that are recoverable by switching modes are raised here too
+    so the auto-mode fallback can catch them at one point.
+    """
+
+
+class UnsupportedPixelFormatError(FrameDecodeError):
+    """The raw screencap declares a pixel format we do not handle.
+
+    v1.0 supports only `PIXEL_FORMAT_RGBA_8888` (value `1`) per ADR-02.
+    Other values (`RGBX_8888`, `RGB_888`, `RGB_565`, `BGRA_8888`,
+    `YV12`, etc.) raise this exception. Callers can catch this to
+    fall back to the PNG path.
+    """
