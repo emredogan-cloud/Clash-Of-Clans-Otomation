@@ -1,0 +1,10 @@
+# Runtime dependency lockfile — pinned for v1.0.
+# Versions match what Phase 0 measured against and what Phase 1 was
+# developed against. Regenerate by:
+#   pip-compile --output-file=requirements-lock.txt pyproject.toml
+# or, for a one-shot refresh:
+#   pip install -U numpy 'opencv-python-headless<5' && pip freeze > requirements-lock.txt
+#
+# Do NOT add packages here without an ADR amendment (ADR-16).
+numpy==2.4.6
+opencv-python-headless==4.13.0.92

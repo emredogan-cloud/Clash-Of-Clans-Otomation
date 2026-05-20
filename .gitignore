@@ -3,4 +3,10 @@ __pycache__/
 *.pyc
 *.pyo
 *.tmp
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+.env
+var/
 bench/artifacts/raw_capture.bin
