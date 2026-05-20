@@ -76,3 +76,32 @@ class UnsupportedPixelFormatError(FrameDecodeError):
     `YV12`, etc.) raise this exception. Callers can catch this to
     fall back to the PNG path.
     """
+
+
+# ---------------------------------------------------------------------------
+# THINK layer (Phase 3)
+# ---------------------------------------------------------------------------
+
+
+class MatcherError(AutomationError):
+    """Base class for errors raised inside the THINK pipeline."""
+
+
+class InvalidROIError(MatcherError):
+    """A template's ROI is malformed or out of bounds.
+
+    Raised when:
+    - The ROI tuple is not 4 integers.
+    - Any coordinate is negative.
+    - `x1 >= x2` or `y1 >= y2`.
+    - The ROI extends beyond the frame supplied to `Matcher.match`.
+    """
+
+
+class MatchComputationError(MatcherError):
+    """`cv2.matchTemplate` could not compute a result.
+
+    The most common cause is a template larger than the search area
+    (full frame or ROI). Per `cv2.matchTemplate` semantics, the
+    template must be no larger than the image in both dimensions.
+    """
