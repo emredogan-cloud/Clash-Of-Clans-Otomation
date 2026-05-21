@@ -253,3 +253,33 @@ class RecoveryError(WatchdogError):
     — the framework cannot crash on a recovery fault. Phase 7
     recovery is best-effort by design.
     """
+
+
+# ---------------------------------------------------------------------------
+# External watchdog / L2 supervision (Phase 8A)
+# ---------------------------------------------------------------------------
+
+
+class HeartbeatError(AutomationError):
+    """A heartbeat write or read failed structurally.
+
+    Raised by `watchdog.heartbeat.HeartbeatWriter` when the
+    payload cannot be encoded to JSON, when the destination
+    directory cannot be created, or when a caller passes a
+    health object that does not expose a `to_debug_dict()` method.
+    Routine I/O failures during the atomic-write dance are NOT
+    raised — they are logged at WARN and swallowed so a transient
+    disk hiccup cannot kill the liveness beacon.
+    """
+
+
+class ExternalWatchdogError(AutomationError):
+    """A structural fault inside the external watchdog process.
+
+    Raised by `watchdog.watchdog.ExternalWatchdog` when its own
+    construction or invariants fail (e.g., a non-positive
+    `stale_after_s`). The watchdog itself never raises on a
+    *missing* heartbeat or *malformed* heartbeat — those are
+    classified as `MISSING` or `INVALID` and reported via the
+    `WatchdogStatus.recommendation` channel.
+    """

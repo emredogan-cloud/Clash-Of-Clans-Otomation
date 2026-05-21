@@ -492,19 +492,21 @@ A `replay <tick_id>` CLI mode reconstructs a tick from logs + artifacts and re-r
 
 ### 5.7 Recovery & watchdog
 
-Detailed in [ADR-11](./ADR.md#adr-11--recovery--watchdog-external-process-not-in-process-supervisor) and the recovery flow in [§5 of ARCHITECTURE-DIAGRAMS.md](./ARCHITECTURE-DIAGRAMS.md#5-recovery-flow--what-happens-when-something-goes-wrong).
+Detailed in [ADR-11](./ADR.md#adr-11--recovery--watchdog-external-process-not-in-process-supervisor) and [ADR-11a](./ADR.md#adr-11a--l1l2-supervision-split-phase-8a); recovery flow in [§5 of ARCHITECTURE-DIAGRAMS.md](./ARCHITECTURE-DIAGRAMS.md#5-recovery-flow--what-happens-when-something-goes-wrong).
 
-Two layers:
+Two layers, delivered across two phases:
 
-1. **In-process recovery** — recovery states in the FSM (`RESET_LITE`, `RESET_HARD`, `RECONNECTING`). Soft faults are absorbed here.
-2. **External watchdog** — a small (~50 LOC) Python script running as a `systemd --user` unit. Reads `var/run/heartbeat` every 5 s. If stale beyond threshold, signals the framework: SIGTERM → wait 5 s → SIGKILL. Then restarts the unit. Tracks restart frequency; halts and emits a notification beyond 5 restarts/hour.
+1. **L1 — In-process supervision + recovery** (Phase 7, shipped). The `Watchdog` class in `automation/watchdog.py` wraps each orchestrator tick: catches exceptions, post-hoc-flags timeouts, composes a `RuntimeHealth` snapshot. The `RecoveryManager` in `automation/recovery.py` performs one-shot best-effort recovery (force orchestrator FSM back to IDLE via the `_transition` chokepoint; re-check ADB device state). The full `RESET_LITE` / `RESET_HARD` / `RECONNECTING` recovery cascade described in §11.1 is a Phase 8B candidate; v1.0 Phase 7 implements only the L1 essentials.
+2. **L2 — External watchdog**, delivered in two parts:
+   - **L2 observation** (Phase 8A, shipped). The `ExternalWatchdog` class in `watchdog/watchdog.py` runs outside the framework process. It reads `var/watchdog/heartbeat.json` written by `watchdog/heartbeat.py:HeartbeatWriter`, classifies freshness (HEALTHY / STALE / MISSING / INVALID), and returns a `WatchdogStatus` carrying an escalation *recommendation* (`none` / `RESET_LITE` / `RESET_HARD`). Stdlib-only; no imports from `automation/*`. The recommendation is **data only** — Phase 8A does not signal, kill, or restart anything.
+   - **L2 action** (Phase 8B, deferred). A small (~50 LOC) Python script (or systemd unit) that consumes the L2 recommendation and translates it into the action: `SIGTERM → wait → SIGKILL → restart`; restart-rate ceiling (halt + notify above 5 restarts/hour). Implementation is the operator-facing supervision substrate (systemd `--user`, supervisord, container restart policy — substrate-independent because the L2 observer only emits data).
 
-#### 5.7.1 Watchdog as systemd user unit
+#### 5.7.1 Watchdog as systemd user unit (Phase 8B)
 
-The framework is delivered as two units:
+The framework will be delivered as two units (Phase 8B work):
 
 - `automation.service` — the framework.
-- `automation-watchdog.service` — the watchdog.
+- `automation-watchdog.service` — invokes `ExternalWatchdog.check()` on a schedule (timer or short poll loop) and acts on the recommendation.
 
 `automation.service` does *not* declare `Restart=on-failure` because that would race the watchdog. The watchdog owns restart.
 

@@ -270,6 +270,8 @@ Tags:
 | 21 | v1.1 | Adaptive pre-validation delay per action class (reduce retry rate on slow animations) | Phase-5 discovery §10.3 | S |
 | 22 | v1.1 | In-frame diff validation (cheap SSIM/pixel-diff fallback before full re-match) | Phase-5 discovery §10.1 | M |
 | 23 | v1.1 | `Action.requires_validation: bool` annotation for action classes whose effect is structurally unobservable (key/text) | Phase-5 discovery §10.1 | S |
+| 24 | v1.1 | Auto-wire `HeartbeatWriter.beat()` into the Phase 7 `Watchdog.run_tick()` so the L1 supervisor produces a beat for every supervised tick without operator wiring | Phase-8A discovery §10a.2 | S |
+| 25 | v1.1 | Ship the L2 action layer (Phase 8B) — systemd `--user` unit + restart-rate ceiling + `var/run/watchdog-restarts.log` | Phase-8A discovery §10a.1, ADR-11a | M |
 
 ---
 
@@ -547,6 +549,98 @@ Phase 7 lands.
 **Residual concern:** none. The Phase 5.5 consistency audit
 (`docs/phase55_consistency_patch.md` §2.12) records this as an
 OPEN tracked-for-Phase-7 item.
+
+---
+
+## 10a. Phase 8A discoveries (added 2026-05-21)
+
+This section is additive — catalogues observations from the
+Phase 8A L2 watchdog implementation. Positioning convention same
+as §9 / §10 (MITIGATE / ACCEPT / DEFER / INVESTIGATE).
+
+### 10a.1 L2 observation is sufficient on its own for the operator's primary need (ACCEPT)
+
+**Discovery (factual):** the operator's primary missing-watchdog
+concern is "I'd like to know when the framework has hung."
+Phase 8A's `ExternalWatchdog.check()` answers that question
+without any side-effects: poll once per N seconds from a shell
+loop / cron / systemd timer, get a `WatchdogStatus`, decide what
+to do with it. The "decide what to do" half is small (≤ 20 LOC
+of operator script) but framework-independent.
+
+**Position — ACCEPT for v1.0.** Splitting observation from
+action allows operators to wire the L2 into different
+supervision substrates without re-implementing the observer.
+Phase 8B will add a thin "act on the recommendation" piece —
+small, substrate-specific, and not part of the framework's
+core API.
+
+### 10a.2 Heartbeat is *not* auto-wired into the Phase 7 Watchdog (DEFER → Phase 8B)
+
+**Discovery (factual):** Phase 8A ships `HeartbeatWriter` as a
+standalone utility; the Phase 7 `Watchdog.run_tick()` does not
+call `heartbeat.beat(...)` automatically. The Phase 8A prompt
+prohibits modifications to Phase 7's `automation/watchdog.py`,
+so the wiring is left to a future caller — either a Phase 8B
+"run loop" that owns the iteration cadence, or an operator
+script that wraps `run_tick + beat` together.
+
+**Position — DEFER to Phase 8B.** The wiring is small (one
+`hb.beat(correlation_id, wd.last_health)` line after each
+`run_tick()`); it does not warrant breaking the Phase 8A
+prompt's process-boundary discipline. Captured as v1.1 backlog
+row #24.
+
+### 10a.3 L2 recommendation strings are wire-stable (ACCEPT)
+
+**Discovery (factual):** Phase 8A's recommendations are exactly
+three strings: `"none"`, `"RESET_LITE"`, `"RESET_HARD"`. These
+match the recovery cascade tokens in SYSTEM-ROADMAP §11.1 (which
+were specified by ADR-08 / ADR-11) so a future Phase 8B caller
+can route them into the right recovery handler without
+translation.
+
+**Position — ACCEPT.** Wire-stable strings are easier to parse
+in shell scripts than enums, and the small set avoids the
+"recommendation: 0x4" debugging trap.
+
+### 10a.4 No L2 ⇄ L1 leakage (ACCEPT)
+
+**Discovery (factual):** `watchdog/watchdog.py` imports nothing
+from `automation/orchestrator`, `automation/sensor`,
+`automation/matcher`, `automation/actuator`, the L1
+`automation/watchdog`, or `automation/runtime_health`. A
+dedicated unit test (`test_module_does_not_import_orchestrator`)
+fails the build if any such import sneaks in. The process
+boundary is structurally enforced.
+
+**Position — ACCEPT.** The L2 watchdog could be split out into
+its own distribution / repository without code changes; only the
+`automation.errors` import would need replacing.
+
+### 10a.5 Heartbeat schema is versioned (MITIGATE)
+
+**Discovery (factual):** the heartbeat carries
+`schema_version: 1`. The L2 watchdog refuses to interpret any
+schema_version other than 1 (returns `INVALID + RESET_HARD`).
+This makes future schema changes safe: an old L2 watchdog
+observing a new framework will recommend HARD-restart (the
+operator notices and upgrades) rather than silently
+mis-classify.
+
+**Position — MITIGATE.** v1.0 ships with schema_version 1.
+Any future change needs the schema-version bump + matching
+L2 watchdog version. Tracked in this report's §10a.
+
+### 10a.6 L2 status enum is closed (ACCEPT)
+
+**Discovery (factual):** the four statuses (HEALTHY / STALE /
+MISSING / INVALID) are validated by `WatchdogStatus.__post_init__`.
+New statuses cannot be silently introduced.
+
+**Position — ACCEPT.** Closed enum is the right v1.0 choice;
+the discovery is that no Phase 8B caller will need additional
+verdicts to act on the existing three recommendations.
 
 ---
 

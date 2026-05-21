@@ -1,0 +1,25 @@
+{
+  "heartbeat_path": "/home/emre/Downloads/Clash-Of-Clans-Otomation/var/watchdog/heartbeat.json",
+  "overhead": {
+    "iterations": 500,
+    "mean_ms": 0.035848294,
+    "median_ms": 0.0302555,
+    "nfr_lt_1ms_met": true,
+    "p95_ms": 0.050481
+  },
+  "scenario_1_healthy": {
+    "age_s": 0.001334,
+    "recommendation": "none",
+    "status": "HEALTHY"
+  },
+  "scenario_2_stale": {
+    "age_s": 2.002434,
+    "recommendation": "RESET_LITE",
+    "status": "STALE"
+  },
+  "scenario_3_invalid": {
+    "age_s": null,
+    "recommendation": "RESET_HARD",
+    "status": "INVALID"
+  }
+}

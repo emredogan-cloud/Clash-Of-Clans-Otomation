@@ -358,8 +358,25 @@ will be reconciled when Phase 7 lands. Recording the discrepancy
 here so a future reader of PHASE-MASTER-PROMPTS doesn't think
 Phase 5 was incomplete — it was narrowed deliberately.
 
-**Resolution:** OPEN (tracked). No edit to PHASE-MASTER-PROMPTS
-Phase 5 in this PR.
+**Resolution:** PARTIALLY RESOLVED (2026-05-21). Phase 7 closed
+the recovery-cascade L1 half (`RecoveryManager` performs one-shot
+orchestrator-reset + ADB re-check; see `phase7-report.md` §3).
+Phase 8A closed the heartbeat-writer + external-watchdog
+*observation* half (`watchdog/heartbeat.py`, `watchdog/watchdog.py`;
+see `phase8a-report.md` and `ADR-11a`). Remaining gap from the
+original PHASE-MASTER-PROMPTS Phase 5 scope:
+- `Script` + `Screen` abstractions — Phase 8B candidate, still
+  OPEN.
+- Mermaid FSM exporter — Phase 8B candidate, still OPEN.
+- CLI extension (`python -m automation.cli run …`) — Phase 8B
+  candidate, still OPEN.
+- L2 *action* layer (systemd unit, restart-rate ceiling) —
+  Phase 8B, still OPEN per ADR-11a's deferral.
+
+No edit to PHASE-MASTER-PROMPTS Phase 5 in this PR; the original
+Phase 5 prompt remains as historical context. The actual
+delivered scope is documented in `phase5-report.md` §2.4 and
+extended in `phase7-report.md` §10.1 + `phase8a-report.md` §7.
 
 ---
 
@@ -378,7 +395,7 @@ Phase 5 in this PR.
 | 2.9 | §11 state-table VALIDATING timeout vs retry | S3 | footnote (resolved here) |
 | 2.10 | frozen_nfrs §7 stale on action-latency NFRs | S3 | refresh entry (resolved here) |
 | 2.11 | ARCHITECTURE §4 state-diagram Phase coverage | S3 | OPEN — deferred to Phase 6 |
-| 2.12 | PHASE-MASTER-PROMPTS Phase 5 vs delivered scope | S3 | OPEN — deferred to Phase 7 |
+| 2.12 | PHASE-MASTER-PROMPTS Phase 5 vs delivered scope | S3 | PARTIALLY RESOLVED — L1 recovery shipped in Phase 7; L2 observation shipped in Phase 8A. L2 action + Script + Mermaid exporter + CLI remain OPEN (Phase 8B candidates). |
 
 **S0:** 0 issues. **S1:** 3 issues, all RESOLVED IN THIS PR.
 **S2:** 3 issues, all RESOLVED IN THIS PR. **S3:** 6 issues —

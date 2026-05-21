@@ -713,6 +713,17 @@ Templates live under `assets/templates/` as PNG files. Each template is paired w
 
 ## ADR-11 — Recovery & watchdog: external process, not in-process supervisor
 
+> **Status note (Phase 7, 2026-05-21):** L1 (in-process) shipped at
+> `automation/watchdog.py` + `automation/recovery.py`. The L2
+> (external) process specified below was NOT shipped in Phase 7;
+> see `phase7-report.md` §10.1.
+>
+> **Status note (Phase 8A, 2026-05-21):** L2 *observation* + escalation
+> shipped at `watchdog/watchdog.py` + `watchdog/heartbeat.py` (see
+> [ADR-11a](#adr-11a--l1l2-supervision-split-phase-8a)). The L2
+> *side-effect* layer (systemd unit, SIGTERM/SIGKILL on stale
+> heartbeat, restart-rate ceiling) remains deferred to Phase 8B.
+
 ### Context
 
 The framework can fault in ways the framework cannot itself recover from: a process-wide segfault inside a C extension, a hung asyncio loop, an OS-level OOM kill. Recovery from these requires something *outside* the failing process.
@@ -737,6 +748,99 @@ Recovery has **two layers**:
 
 - **In-process supervisor only**: cannot recover from segfaults or hung loops, which are exactly the cases where supervision is most needed.
 - **`systemd` system unit**: would require root for installation; user-level systemd is sufficient and respects the principle of least privilege.
+
+---
+
+## ADR-11a — L1/L2 supervision split (Phase 8A)
+
+> **Status:** Accepted, Phase 8A (2026-05-21).
+> **Supersedes:** nothing in ADR-11. ADR-11's two-layer decision
+> stands. This ADR records the *delivery split* across Phase 7
+> and Phase 8A, and the policy boundary between the L2 observer
+> (Phase 8A) and the L2 action layer (deferred to Phase 8B).
+> **Source documents:** [phase7-report.md](../phase7-report.md) §10.1,
+> [phase8a-report.md](../phase8a-report.md).
+
+### Context
+
+ADR-11 specified a two-layer recovery system but did not document
+which layer is delivered by which phase. By Phase 8A the runtime
+has both halves of L1 (in-process supervision in `Phase 7`) and
+the *observation half* of L2 (this Phase). The action half of
+L2 — actually restarting the framework process when the heartbeat
+is stale — was deliberately deferred to Phase 8B per the Phase 8A
+prompt's prohibition on daemons, kill semantics, and reboots.
+
+A future reader of ADR-11 alone would not know which subset of
+"L2" is delivered today and which is not. This ADR makes that
+explicit.
+
+### Decision
+
+The two-layer recovery hierarchy is divided into four delivery
+units:
+
+| Unit | Status (2026-05-21) | Delivered by | Location |
+|---|---|---|---|
+| **L1 supervision** — in-process `Watchdog.run_tick()` wraps one orchestrator tick; catches exceptions; flags post-hoc soft timeouts | ✅ shipped | Phase 7 | `automation/watchdog.py` |
+| **L1 recovery** — in-process `RecoveryManager.recover(error)`: force orchestrator to IDLE + re-check ADB device state. Best-effort, one-shot. | ✅ shipped | Phase 7 | `automation/recovery.py` |
+| **L2 observation** — out-of-process `ExternalWatchdog.check()` reads `var/watchdog/heartbeat.json`, classifies freshness (HEALTHY / STALE / MISSING / INVALID), emits a `WatchdogStatus` with a *recommendation* (data only — `none` / `RESET_LITE` / `RESET_HARD`). Stdlib-only. No imports from `automation/orchestrator`, `sensor`, `matcher`, `actuator`, or the L1 `automation/watchdog`. | ✅ shipped | Phase 8A (this addendum) | `watchdog/watchdog.py` + `watchdog/heartbeat.py` |
+| **L2 action** — interpret the L2 recommendation and *do something*: send SIGTERM/SIGKILL to the framework process, restart it via `systemd --user`, enforce a restart-rate ceiling, log to `var/run/watchdog-restarts.log`. | ❌ deferred | Phase 8B | (not yet present) |
+
+### Escalation policy (Phase 8A, data only)
+
+| Status | Trigger | Recommendation |
+|---|---|---|
+| `HEALTHY` | heartbeat present, parses, schema valid, age ≤ stale_after_s | `none` |
+| `STALE` | heartbeat present, parses, schema valid, age > stale_after_s | `RESET_LITE` |
+| `MISSING` | heartbeat file absent | `RESET_LITE` |
+| `INVALID` | malformed JSON, schema mismatch, or unreadable | `RESET_HARD` |
+
+The recommendation strings are wire-stable in v1.0 and consumed by
+the future Phase 8B caller (a systemd unit, an operator script, or
+a future run-loop). Phase 8A does NOT itself act on them — see
+"Rejected alternatives" below.
+
+### Consequences
+
+- The framework process now writes a per-tick heartbeat via
+  `HeartbeatWriter.beat(...)`. The Phase 8A live harness shows the
+  pattern; integration into a Phase 7 `Watchdog.run_tick()` loop
+  is a small Phase 8B follow-up.
+- An operator can run `ExternalWatchdog` from a shell loop,
+  cron, or systemd timer (no daemon needed for v1.0) and observe
+  the framework's liveness from outside.
+- The `watchdog/` package is stdlib-only by structural contract;
+  the L2 observer can be deployed independently of the framework
+  package (different Python version, container, etc.).
+
+### Risks
+
+- **Operators may expect Phase 8A to actually restart the
+  framework on a STALE verdict.** It does not. The recommendation
+  is data only. Documented in `phase8a-report.md` §4 and §10.
+  Phase 8B closes this gap.
+- **The heartbeat path is conventional but configurable**
+  (`var/watchdog/heartbeat.json` by default; constructor argument).
+  A future Phase 8B unit + operator script must agree on the path
+  with the framework. Cross-referencing via configuration is the
+  v1.1 candidate.
+
+### Rejected alternatives — why
+
+- **Ship the full L2 (observation + action) in Phase 8A.** Out of
+  scope per the Phase 8A prompt's prohibitions on daemons, signals,
+  and reboots. Splitting observation and action also lets
+  operators wire the L2 into different supervision substrates
+  (systemd, runit, supervisord, container restart policies)
+  without re-implementing the observer.
+- **Make L2 take action on its own (`os.kill`).** Action is
+  the substrate's responsibility, not the observer's. Co-locating
+  them in v1.0 would lock operators into a single substrate.
+- **Roll L2 observation into `automation/watchdog.py` (Phase 7).**
+  Violates the process boundary: the L1 watchdog runs *inside*
+  the framework and dies with it. The L2 watchdog must keep
+  running when the framework has crashed.
 
 ---
 
