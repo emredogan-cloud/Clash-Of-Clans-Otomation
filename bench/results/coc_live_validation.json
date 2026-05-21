@@ -1,0 +1,14 @@
+{
+  "blocked_by": "template_pack_incomplete",
+  "error": "template pack incomplete: missing: ['home_attack_button.png', 'find_match_button.png', 'battle_ui_indicator.png', 'surrender_button.png', 'surrender_confirm.png', 'return_home_button.png']. Capture via `python -m scripts.coc_template_capture <label>` then crop the displayed PNG to the named files under /home/emre/Downloads/Clash-Of-Clans-Otomation/templates/.",
+  "present_filenames": [],
+  "required_filenames": [
+    "home_attack_button.png",
+    "find_match_button.png",
+    "battle_ui_indicator.png",
+    "surrender_button.png",
+    "surrender_confirm.png",
+    "return_home_button.png"
+  ],
+  "success": false
+}
