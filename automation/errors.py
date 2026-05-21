@@ -105,3 +105,35 @@ class MatchComputationError(MatcherError):
     (full frame or ROI). Per `cv2.matchTemplate` semantics, the
     template must be no larger than the image in both dimensions.
     """
+
+
+# ---------------------------------------------------------------------------
+# ACT layer (Phase 4)
+# ---------------------------------------------------------------------------
+
+
+class ActuatorError(AutomationError):
+    """Base class for errors raised inside the ACT pipeline."""
+
+
+class CoordinateError(ActuatorError):
+    """A coordinate, dimension, or duration argument was malformed.
+
+    Raised before any ADB invocation. Covers:
+    - Non-finite or non-numeric coordinates.
+    - Coordinates outside the reference frame (`0 ≤ x < ref_w`, etc.).
+    - Non-positive native target dimensions.
+    - Non-positive durations on `swipe` / `long_press`.
+    - Denormalized coordinates that fall outside the device's native
+      screen (a defensive guard; should not occur if inputs validate).
+    """
+
+
+class ActionExecutionError(ActuatorError):
+    """The underlying ADB command failed at issuance time.
+
+    Wraps the lower-level `ADBError` so callers (and the future
+    orchestrator) can branch on ACT-layer faults without importing the
+    ADB layer's exception hierarchy directly. Coordinate-level
+    validation does not raise this; it raises `CoordinateError` first.
+    """
