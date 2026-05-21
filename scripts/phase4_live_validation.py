@@ -2,20 +2,26 @@
 """Phase 4 live validation harness.
 
 Throwaway script that exercises the Actuator against the connected
-device. Runs 20 iterations of each of {tap, swipe, long_press} in a
-safe region of the screen and reports median / p95 / stdev for the
-ADB-shell-side latency reported on each `ActionResult`.
+device. Runs 20 iterations of each of {tap, swipe, long_press} on a
+deterministic, launcher-independent surface and reports
+median / p95 / stdev for the ADB-shell-side latency reported on each
+`ActionResult`.
 
-Safe region:
-- "Safe" = the lower-middle region of the home screen / launcher /
-  whatever the device currently displays. We deliberately avoid the
-  status bar (top), navigation bar (bottom), and the corner gestures
-  that could trigger system actions.
-- The reference-space anchor used is `(540, 1500)` — center column,
-  ~78% down the reference frame (lower-middle).
-- Swipes are vertical, short, and stay in the same safe band so
-  they cannot trigger a back-gesture (left/right edges) or pull
-  down notifications (top).
+Inert baseline (Phase 6.5 harness-hygiene amendment, 2026-05-21):
+- The harness pre-launches the system Settings app via
+  `am start -a android.settings.SETTINGS` before each action block.
+  This replaces the original behaviour of tapping on whatever the
+  device's launcher was displaying — which on Xiaomi MIUI landed on
+  app-grid icons (Gallery, etc.) and was thus launcher-layout-
+  dependent (see RCA in conversation; phase65-report.md).
+- Reference anchors are unchanged ((540, 1500) tap, (540, 1400→1100)
+  swipe, (540, 1500) long_press). Native target (540, 1881) on the
+  operator's 1080×2408 device. Inside Settings this lands on a
+  Settings list row — taps may navigate into a Settings sub-screen,
+  but **no third-party app launches**.
+- Latency measurements are unaffected: the actuator's perf_counter_ns
+  timing covers the ADB shell invocation only, independent of what
+  the tap opens on the device.
 
 Usage:
     .venv/bin/python -m scripts.phase4_live_validation
@@ -46,12 +52,47 @@ from automation.adb import ADB
 from automation.denormalize import Denormalizer
 
 
-SAFE_TAP_REF: tuple[int, int] = (540, 1500)   # lower-middle, safe.
+# Reference-space anchors. The harness pre-launches Settings (see
+# `_ensure_inert_baseline`) so these coordinates target a Settings UI
+# row, not a launcher icon. "Safe" here means: no status-bar pull,
+# no nav-bar press, no edge gesture — AND, after Phase 6.5, no
+# third-party app launch.
+SAFE_TAP_REF: tuple[int, int] = (540, 1500)
 SAFE_SWIPE_FROM_REF: tuple[int, int] = (540, 1400)
 SAFE_SWIPE_TO_REF: tuple[int, int] = (540, 1100)  # short upward swipe
 SAFE_LONG_PRESS_REF: tuple[int, int] = (540, 1500)
 
 ITERATIONS: int = 20
+
+
+def _ensure_inert_baseline(adb: "ADB") -> None:
+    """Pre-launch the system Settings app as a launcher-independent baseline.
+
+    Phase 6.5 hygiene patch: the original Phase-4 harness tapped on
+    "whatever the home screen happened to display", which on Xiaomi
+    MIUI meant tapping a dock or app-grid icon and incidentally
+    launching Gallery / other third-party apps. Settings has no
+    third-party icons in its UI and the layout is OEM-stable, so
+    pre-launching it makes the tap surface reproducible.
+
+    Side-effect: subsequent taps may navigate into Settings
+    sub-screens. That is acceptable — Phase 4 measures actuator
+    latency only, and Settings sub-screens cannot launch third-party
+    apps. The harness calls this helper *before each action block*
+    (tap / swipe / long_press) so each block starts from a fresh
+    Settings main screen.
+    """
+    adb.shell(["am", "start", "-W", "-a", "android.settings.SETTINGS"])
+    time.sleep(0.8)
+
+
+def _press_home_quiet(adb: "ADB") -> None:
+    """Final-cleanup: leave the device on the launcher home screen.
+
+    Called once at end-of-script so the operator's device is not
+    left mid-Settings-navigation. Cheap (single KEYCODE_HOME).
+    """
+    adb.shell(["input", "keyevent", "3"])
 
 
 def _stats(values: list[float]) -> dict[str, float]:
@@ -116,6 +157,10 @@ def main() -> int:
     all_stats: dict[str, dict[str, float | int]] = {}
     all_failures: dict[str, int] = {}
 
+    # Inert baseline: launch Settings before warmup so the warmup
+    # taps don't accidentally launch a launcher icon.
+    _ensure_inert_baseline(adb)
+
     # Warmup: one of each, discarded.
     actuator.tap(*SAFE_TAP_REF, native_w, native_h)
     actuator.swipe(*SAFE_SWIPE_FROM_REF, *SAFE_SWIPE_TO_REF,
@@ -125,6 +170,7 @@ def main() -> int:
 
     # tap
     print("Running tap iterations...")
+    _ensure_inert_baseline(adb)  # fresh Settings main screen
     lat_taps: list[float] = []
     succ_taps = 0
     for i in range(ITERATIONS):
@@ -140,6 +186,7 @@ def main() -> int:
 
     # swipe
     print("Running swipe iterations...")
+    _ensure_inert_baseline(adb)  # fresh Settings main screen
     lat_swipes: list[float] = []
     succ_swipes = 0
     for i in range(ITERATIONS):
@@ -158,6 +205,7 @@ def main() -> int:
 
     # long_press
     print("Running long_press iterations...")
+    _ensure_inert_baseline(adb)  # fresh Settings main screen
     lat_lp: list[float] = []
     succ_lp = 0
     for i in range(ITERATIONS):
@@ -172,6 +220,9 @@ def main() -> int:
     all_stats["long_press"] = s
     all_failures["long_press"] = ITERATIONS - succ_lp
     _print_table("long_press", s, succ_lp)
+
+    # Leave the device on the launcher (not mid-Settings).
+    _press_home_quiet(adb)
 
     # Sidecar JSON for the report.
     out_path = Path(__file__).resolve().parent.parent / "bench" / "results" / "phase4_live_validation.json"

@@ -636,3 +636,52 @@ Validation summary:
 The Phase 5 implementer should next read `PHASE-MASTER-PROMPTS.md`
 Phase 5, `ADR.md` ADR-07/08/11/15, and this report's §8 for the
 surface Phase 5 will consume.
+
+---
+
+## 12. Phase 6.5 harness-hygiene amendment (2026-05-21)
+
+> **Scope:** `scripts/phase4_live_validation.py` only. No
+> `automation/*` changes. Framework behaviour unchanged.
+
+**What changed.** The Phase-4 live-validation harness used to issue
+its 60 actions against "whatever the home screen happened to display"
+— which on Xiaomi MIUI meant tapping at native (540, 1881) on the
+launcher's dock / app-grid. That position is launcher-layout-
+dependent and incidentally launched third-party apps (e.g., Gallery).
+
+The harness now pre-launches the system Settings app via
+`adb shell am start -W -a android.settings.SETTINGS` before each
+action block. The Settings UI has no third-party icons and is
+OEM-stable across launchers and Android versions. Taps may navigate
+into Settings sub-screens; that is acceptable because Phase 4
+measures actuator latency only — what the tap opens does not affect
+the measurement, and Settings sub-screens cannot launch third-party
+apps.
+
+**Why it changed.** Reproducibility. The original wording labelled
+the anchor "safe" (`# lower-middle, safe.` at line 49) which was
+true for system-gesture avoidance but not for third-party launches.
+The RCA in the conversation identifying Gallery / Settings launches
+during Phase 4–6 live validation surfaced this gap.
+
+**Live re-run results (Phase 6.5):**
+
+```
+tap         n=20  success=20/20  median= 36.66 ms  p95= 65.87 ms
+swipe       n=20  success=20/20  median=396.87 ms  p95=409.41 ms
+long_press  n=20  success=20/20  median=666.99 ms  p95=708.87 ms
+```
+
+All 60/60 actions succeeded. Tap median improved vs the original
+58.83 ms because Settings handles input on a higher-priority UI
+path on this device — not a load-bearing observation, but consistent
+with the cleaner test surface.
+
+**Launcher dependence removed.** Confirmed by inspecting the
+`var/artifacts/actuator/.../metadata.json` of the re-run: all 60
+actions issued to native (540, 1756–1881), now inside the Settings
+list area. No third-party app launches observed.
+
+See `phase65-report.md` for the full RCA, patch design, and
+regression check.

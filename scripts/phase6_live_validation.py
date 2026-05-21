@@ -1,6 +1,19 @@
 #!/usr/bin/env python3
 """Phase 6 live validation harness.
 
+Phase 6.5 harness-hygiene amendment (2026-05-21):
+- Block A (random-noise template, search miss) and Block B (high-
+  entropy patch, validation-fail demo) used to capture / tap the
+  operator's launcher home screen. On Xiaomi MIUI that meant
+  Block B incidentally launched Gallery / launcher-grid icons.
+  Both blocks now run on the system Settings surface, which has
+  no third-party icons and is OEM-stable.
+- Block C (engineered happy path via Settings + recents) is
+  unchanged. It always explicitly launched Settings via `am start`.
+- All framework behaviour is unchanged. The orchestrator, sensor,
+  matcher, actuator, FSM, metrics, logger, and rotation are
+  byte-identical to Phase 6.
+
 Drives the instrumented Orchestrator through ≥ 10 ticks on the
 connected device and produces:
 
@@ -194,21 +207,30 @@ def main() -> int:
     logger = StructuredLogger(logs_dir=LOGS)
     metrics = MetricsCollector(metrics_dir=METRICS)
 
-    _press_home(adb)
-    time.sleep(0.6)
+    # Phase 6.5 harness-hygiene amendment: Block A and Block B now
+    # run on the system Settings surface instead of the operator's
+    # launcher home screen. Block A's random-noise template still
+    # misses regardless of what is captured, but the captured frame
+    # is now reproducible across launchers. Block B's tap lands on
+    # a Settings list-row — it may navigate into a sub-screen
+    # (interesting for the validation-fail vs validated-retry
+    # distinction) but cannot launch a third-party app.
+    # Block C is unchanged (explicit Settings via `am start`).
+    _start_settings(adb)
+    time.sleep(0.8)
 
     # We'll run a mixed batch:
-    #   - 4 search-only ticks (random-noise template).
-    #   - 3 validated-attempt ticks on the home screen (likely
-    #     validation-fail → validated_retry tier).
-    #   - 3 engineered happy path ticks via recents (likely IDLE).
+    #   - 4 search-only ticks (random-noise template, captured on
+    #     the Settings main screen).
+    #   - 3 validated-attempt ticks (high-entropy patch on Settings).
+    #   - 3 engineered happy path ticks via recents (Block C).
     # 10 ticks total minimum.
 
     tick_latencies: list[float] = []
     tier_counts = {"search_only": 0, "validated": 0, "validated_retry": 0}
 
     # --- block A: 4 SEARCH-ONLY ticks ---
-    print("Block A: 4 SEARCH-ONLY ticks (random-noise template)…")
+    print("Block A: 4 SEARCH-ONLY ticks (random-noise template on Settings)…")
     random_tpl = _make_random_template()
     orch_a = Orchestrator(
         sensor, matcher, actuator, random_tpl,
@@ -222,19 +244,19 @@ def main() -> int:
             orch_a.reset()
         print(f"  A#{i+1}: {r.summary()}")
 
-    # --- block B: 3 validated-attempt ticks (home screen) ---
-    print("Block B: 3 validated-attempt ticks (home screen patch)…")
-    _press_home(adb)
-    time.sleep(0.6)
+    # --- block B: 3 validated-attempt ticks (Settings high-entropy patch) ---
+    print("Block B: 3 validated-attempt ticks (Settings patch)…")
+    _start_settings(adb)
+    time.sleep(0.8)
     setup_frame = sensor.capture()
     bx, by = _find_high_entropy_patch(
         setup_frame, region=(300, 1100, 780, 1700),
     )
-    home_tpl = _make_high_entropy_template(
-        setup_frame, bx, by, name="phase6_home_patch",
+    settings_tpl = _make_high_entropy_template(
+        setup_frame, bx, by, name="phase6_settings_patch",
     )
     orch_b = Orchestrator(
-        sensor, matcher, actuator, home_tpl,
+        sensor, matcher, actuator, settings_tpl,
         logger=logger, metrics=metrics, debug=True,
     )
     for i in range(3):

@@ -596,3 +596,46 @@ The Phase 7 implementer should next read
 `PHASE-MASTER-PROMPTS.md` Phase 7, this report's §8, and the
 existing `docs/phase55_consistency_patch.md` §2.12 (OPEN — Phase 7
 scope reconciliation).
+
+---
+
+## 12. Phase 6.5 harness-hygiene amendment (2026-05-21)
+
+> **Scope:** `scripts/phase6_live_validation.py` only. No
+> `automation/*` changes. Framework behaviour unchanged.
+
+**What changed.** Block A (search-miss) and Block B (validation-fail
+demo) used to capture / tap the operator's launcher home screen.
+Block B's tap incidentally launched Gallery / launcher-grid icons.
+Both blocks now pre-launch the system Settings app
+(`am start -a android.settings.SETTINGS`) so the captured frame and
+the tap target are OEM-stable. The template name in Block B is
+renamed from `phase6_home_patch` to `phase6_settings_patch` to keep
+replay output honest. Block C was already explicit about launching
+Settings; it is unchanged.
+
+**Why it changed.** Reproducibility. See `phase65-report.md` and
+the RCA on "Gallery / Settings launches" for the rationale.
+
+**Live re-run results (Phase 6.5):**
+
+| Block | Tick count | Tier distribution | Notes |
+|---|---:|---|---|
+| A — random-noise on Settings | 4 | 4 × search_only | identical FSM path as before; frame now reproducible |
+| B — Settings patch | 3 | 1 × validated_retry, 2 × search_only | B#1 tap at native (348, 1560) inside Settings; B#2 / B#3 search miss because Settings sub-screen replaces the matched view (same behaviour as before, but on Settings, not on the launcher) |
+| C — recents card | 3 | 3 × validated (no retry this run) | unchanged; engineered happy path |
+
+10/10 ticks completed. Counters: 4 success / 6 failed / 1 retry /
+4 validation ticks. Replay CLI verified on a fresh artifact.
+Rotation pass safe. **Logging + metrics overhead:** median 1.788 ms
+per tick (Phase 6 original measured 1.825 ms; within run-to-run
+variance — < 1% NFR still met).
+
+**Launcher dependence removed.** All taps verified against
+`var/artifacts/orchestrator/.../metadata.json`: tap targets are
+native (348, 1560) for the Settings-patch validate-attempt and
+native (822, 1385) for the recents-card happy path. **No taps at
+launcher-grid coordinates.**
+
+See `phase65-report.md` for the full RCA, patch design, and
+regression check.

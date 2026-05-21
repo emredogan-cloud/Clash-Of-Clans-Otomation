@@ -623,3 +623,43 @@ Validation summary:
 The Phase 6 implementer should next read `PHASE-MASTER-PROMPTS.md`
 Phase 6, `ADR.md` ADR-12 / ADR-13, and this report's §4.3 (tick
 latency) + §8 (Phase-6 surface).
+
+---
+
+## 12. Phase 6.5 harness-hygiene amendment (2026-05-21)
+
+> **Scope:** `scripts/phase5_live_validation.py` only. No
+> `automation/*` changes. Framework behaviour unchanged.
+
+**What changed.** DEMO 1 (search-miss) and DEMO 2 (validation-fail
+demo) used to capture / tap the operator's launcher home screen.
+DEMO 2's tap incidentally launched Gallery / launcher-grid icons,
+making the demo's exact outcome dependent on which launcher the
+operator had installed. Both demos now pre-launch the system
+Settings app (via `am start -a android.settings.SETTINGS`) so the
+captured frame and the tap target are OEM-stable. DEMO 3 was
+already explicit about launching Settings; it is unchanged, with
+a clearer inline comment.
+
+**Why it changed.** Reproducibility. See `phase65-report.md` and
+the RCA on "Gallery / Settings launches" for the rationale.
+
+**Live re-run results (Phase 6.5):**
+
+| Demo | Outcome | Tick latency (ms) |
+|---|---|---:|
+| 1 — random-noise template on Settings | FAIL → FAILED (search miss) | 1571.7 |
+| 2 — high-entropy patch on Settings | FAIL → FAILED (validated_retry) | 2463.1 |
+| 3 — recents card (engineered Settings) | OK → IDLE (validated) | 3297.4 |
+
+All three demos completed cleanly, exercising the same three FSM
+branches as the Phase 5 original. DEMO 2's tap landed at native
+(~430, 1500) inside Settings; no third-party launch.
+
+**Launcher dependence removed.** Confirmed by inspecting the
+`var/artifacts/orchestrator/.../metadata.json` of the re-run: DEMO
+2's anchor moved from (652, 1452) on a home-screen icon to a Settings
+list-row coordinate. DEMO 3 is unchanged.
+
+See `phase65-report.md` for the full RCA, patch design, and
+regression check.

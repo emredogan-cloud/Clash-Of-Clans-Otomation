@@ -2,7 +2,25 @@
 """Phase 5 live validation harness.
 
 Throwaway script that exercises the Orchestrator end-to-end against
-the connected device. Demonstrates two distinct FSM outcomes:
+the connected device.
+
+Phase 6.5 harness-hygiene amendment (2026-05-21):
+- DEMO 1 (random-noise template, search miss) and DEMO 2 (high-
+  entropy template + validation-fail demo) used to run on the
+  operator's launcher home screen. On Xiaomi MIUI that meant the
+  captured frame and the tap target depended on which launcher the
+  operator had installed — and DEMO 2's tap incidentally launched
+  Gallery / other app-grid icons. Both demos now run on the system
+  Settings surface, which is OEM-stable and free of third-party
+  icons.
+- DEMO 3 (engineered happy path via Settings + recents) is
+  unchanged. It always explicitly launched Settings via `am start`;
+  the only update is a clearer inline comment.
+- All framework behaviour is unchanged. The orchestrator, sensor,
+  matcher, actuator, FSM, metrics, logger, and rotation are
+  byte-identical to Phase 6.
+
+Demonstrates two distinct FSM outcomes:
 
 - **Fail (search miss):** a random-noise template is constructed
   that cannot possibly exist on the device's current screen. `tick()`
@@ -161,8 +179,15 @@ def main() -> int:
         adb, denormalizer=Denormalizer((1080, 1920)), seed=4242,
     )
 
-    _press_home(adb)
-    time.sleep(0.6)
+    # Phase 6.5 harness-hygiene amendment: DEMO 1 and DEMO 2 now run
+    # on the system Settings surface instead of the operator's
+    # launcher home screen. The Settings UI has no third-party icons
+    # and the layout is OEM-stable, so neither the captured frame
+    # (DEMO 1) nor the template-and-tap target (DEMO 2) depends on
+    # which launcher the operator has installed. DEMO 3 was already
+    # explicit about launching Settings; it is unchanged.
+    _start_settings(adb)
+    time.sleep(0.8)
 
     # --- DEMO 1: fail-by-design (search miss) -----------------------
     print("=" * 70)
@@ -175,12 +200,18 @@ def main() -> int:
     print(f"final state: {orch_fail.state.value}")
     assert r_fail.state_after.value == "FAILED"
 
-    # --- DEMO 2: attempt happy path (homescreen high-entropy patch) -
-    _press_home(adb)
-    time.sleep(0.6)
+    # --- DEMO 2: validation-fail demo on Settings surface -----------
+    # Re-launch Settings so the template + tap target are
+    # launcher-independent. The high-entropy patch finder scans the
+    # same reference-space band as before; on Settings it lands on a
+    # list-row UI element. The tap may navigate into a Settings
+    # sub-screen (so the template may or may not still match on
+    # re-capture), but it cannot launch a third-party app.
+    _start_settings(adb)
+    time.sleep(0.8)
     print()
     print("=" * 70)
-    print("DEMO 2 — high-entropy homescreen template (outcome depends on hit target)")
+    print("DEMO 2 — high-entropy template on Settings (launcher-independent)")
     print("=" * 70)
 
     setup_frame = sensor.capture()
@@ -193,6 +224,11 @@ def main() -> int:
     print(f"final state: {orch_real.state.value}")
 
     # --- DEMO 3: engineered happy path via recents ------------------
+    # INTENTIONAL: Settings is launched on purpose so it appears as
+    # the most-recent card in the recents view. Tapping that card
+    # reopens Settings; the recents-screen template is then absent
+    # on re-capture, so the orchestrator's VALIDATING step succeeds
+    # → IDLE. This is the canonical Phase-5 happy-path demonstration.
     print()
     print("=" * 70)
     print("DEMO 3 — engineered happy path: tap on Settings card in recents")
