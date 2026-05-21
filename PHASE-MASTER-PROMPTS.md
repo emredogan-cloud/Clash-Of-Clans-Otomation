@@ -449,13 +449,43 @@ You are implementing **Phase 5 — State machine**. Read in full:
 
 ## Phase 6 — Observability
 
+> **Phase-5.5 amendment (2026-05-21):** the bucket layouts and
+> per-tick latency assumptions below predate the Phase 5
+> orchestrator. After Phase 5 measured the actual tick:
+>
+> - Search-only ticks: ~1.2 s median.
+> - Validated ticks (HIT → action → 1 validate): ~2.0–2.2 s median.
+> - Validated + retry ticks: ~2.6–3.0 s median, ≤ 3.3 s p95.
+>
+> The existing `tick_duration` bucket layout
+> `[50, 100, 200, 400, 800, 1600, 3200, 6400]` (ms) was set before
+> these measurements but **happens to be adequate**: 3200 ms catches
+> the Phase-5 retry-path p95 and 6400 ms is head-room for fault
+> spikes. No bucket-layout change required — but Phase 6 MUST
+> document that 1600 ms ≤ `tick_duration` ≤ 3300 ms is the
+> *expected operating range for validated ticks*, not a fault
+> indicator. The `state` label on the histogram (`tick_duration_
+> seconds_bucket{state}`) becomes load-bearing: it lets dashboards
+> separate search-only ticks (`state="IDLE"` exit) from validated
+> ticks (`state="VALIDATING"` exit) into different distributions.
+>
+> See [`docs/frozen_nfrs_v1.md` §1.1](../docs/frozen_nfrs_v1.md#11-frozen-targets)
+> for the tier-split tick-latency NFR,
+> [ADR-08a](../ADR.md#adr-08a--validation-cost-consequence-of-the-fsm-design-phase-55)
+> for the architectural rationale, and
+> [`docs/phase55_consistency_patch.md` §2.6](../docs/phase55_consistency_patch.md)
+> for the audit entry.
+
 ### Master prompt
 
 You are implementing **Phase 6 — Observability**. Read in full:
 
 - `SYSTEM-ROADMAP.md` §5.6.
-- `ADR.md` ADR-12, ADR-13.
+- `ADR.md` ADR-12, ADR-13, **ADR-08a** (validation-cost — affects
+  tick-duration bucket interpretation).
 - `ARCHITECTURE-DIAGRAMS.md` §1.
+- `docs/frozen_nfrs_v1.md` §1.1 (tier-split tick latency).
+- `phase5-report.md` §4 (per-FSM-path tick latency measurements).
 
 **Goal.** Production-grade observability: structured JSON logs, a Prometheus-text metrics file, an artifact store with rotation, and a `replay` CLI subcommand. Instrument all existing subsystems.
 
@@ -464,10 +494,10 @@ You are implementing **Phase 6 — Observability**. Read in full:
 1. `automation/observability/__init__.py`.
 2. `automation/observability/log.py` — structured JSON logger. Sets up the root logger to write JSONL to `var/log/automation.jsonl` with rotation. Provides `bind_correlation_id(tick_id)` for per-tick context. Levels configurable.
 3. `automation/observability/metrics.py` — `MetricsRegistry`. Provides `Counter`, `Gauge`, `Histogram` primitives. Bucket layouts:
-    - Tick duration: 50, 100, 200, 400, 800, 1600, 3200, 6400 (ms).
-    - Capture duration: 25, 50, 100, 200, 400, 800, 1600, 3200 (ms).
+    - Tick duration: 50, 100, 200, 400, 800, 1600, 3200, 6400 (ms). **Phase-5.5 rationale:** the upper buckets (1600, 3200) are the *expected operating range for validated ticks*, not fault indicators. Search-only ticks land in the 800–1600 ms bucket; validated ticks land in 1600–3200 ms; validated-with-retry ticks land in 3200 ms (just under) with a small overflow risk into 6400 ms (treat as a fault signal). Dashboards MUST split on `state` label (search-only vs validated) before reading latency distributions.
+    - Capture duration: 25, 50, 100, 200, 400, 800, 1600, 3200 (ms). The 800–1600 ms bucket is the *expected* median per ADR-01a — not a fault.
     - Match duration: 1, 2, 5, 10, 25, 50, 100, 250, 500 (ms).
-    - Action duration: 50, 100, 200, 400, 800, 1600, 3200 (ms).
+    - Action duration: 50, 100, 200, 400, 800, 1600, 3200 (ms). Per-action latency tier (Phase 4): tap ~60 ms lands in 100 ms; swipe 370 ms (at 300 ms duration) lands in 400 ms; long_press 660 ms (at 600 ms hold) lands in 800 ms. All within budget.
     Writes the Prometheus text exposition format to `var/metrics/metrics.prom` every 10 s (configurable). Writes atomically.
 4. `automation/observability/artifacts.py` — `ArtifactStore`. Methods: `save_failure(tick_id, frame, template, score, debug_image)`, `save_validation_failure(tick_id, frame, expected_template)`. Rotation: keep the last 500 artifacts up to 500 MB; whichever cap hits first. Disk-space circuit breaker: if `df` on the artifacts partition reports < 1 GB free, the store goes into a "drop" mode that logs but does not write, until space is reclaimed.
 5. `automation/observability/correlation.py` — `correlation_id_var` (`ContextVar`). Every log line and every metric labeled with it.

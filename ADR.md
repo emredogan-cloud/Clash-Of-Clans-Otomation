@@ -502,6 +502,18 @@ The framework has three concurrent concerns: I/O against ADB (blocking), CV work
 
 ## ADR-08 — State machine: hand-rolled finite-state engine, no framework
 
+> **Status note (Phase 5.5, 2026-05-21):** ACCEPTED. The decision —
+> hand-rolled FSM, no library — stands. Phase 5 implemented the
+> inner-slice (5-state) FSM at `automation/state.py` +
+> `automation/orchestrator.py` (~540 LOC total including container
+> dataclasses); the full §11 13-state model is Phase 6+ work. A
+> consequence not enumerated in this ADR — that the `VALIDATING`
+> state's "full recapture + rematch" semantics roughly *double*
+> per-tick capture cost — is documented in the additive
+> [ADR-08a](#adr-08a--validation-cost-consequence-of-the-fsm-design-phase-55).
+> See [phase5-report.md](../phase5-report.md) §2 (architecture) and
+> §4 (latency).
+
 ### Context
 
 The orchestrator is a state machine of moderate size (target ~10–20 states in v1, ~30–50 by maturity). Existing libraries (`transitions`, `python-statemachine`, `automat`) exist but introduce a dependency whose lifecycle and idioms must be learned and maintained.
@@ -524,6 +536,124 @@ Hand-roll the state machine as a small (estimated 200–400 LOC core) module: ex
 
 - **`transitions` library**: adds a dependency, its callback model couples poorly with asyncio without adapters, and the transition table format is verbose for our needs.
 - **`python-statemachine`**: similar reasoning; smaller than `transitions` but still a framework where one file would do.
+
+---
+
+## ADR-08a — Validation-cost consequence of the FSM design (Phase 5.5)
+
+> **Status:** Accepted, Phase 5.5 (2026-05-21).
+> **Supersedes:** nothing. The structural decision in ADR-08 stands.
+> This ADR documents a *consequence* of ADR-08 that ADR-08 itself
+> does not enumerate.
+> **Source measurements:** [phase5-report.md](../phase5-report.md) §4
+> (3 live demos on the operator's hardware); composition of
+> [phase-0-report.md](../phase-0-report.md) §3/§4 +
+> [phase4-report.md](../phase4-report.md) §4.
+
+### Context
+
+ADR-08 chose a hand-rolled FSM and enumerated the structural
+benefits (no dependency, one-file state model, Mermaid-exportable).
+It did not address per-tick latency cost.
+
+Phase 5 implemented the inner FSM slice and surfaced a load-bearing
+consequence: **the `VALIDATING` state, as designed (`automation/
+orchestrator.py:_validate_cycle`), is a full `Sensor.capture()` +
+`Matcher.match()` cycle**, identical in cost to the `SEARCHING`
+state's capture + match. Every tick that reaches `VALIDATING`
+therefore pays for *at least one extra capture* (~940 ms on this
+hardware); a tick that uses the validation retry pays for two
+extra captures.
+
+This is structural, not an implementation defect:
+
+- The single-template orchestrator has no cheaper way to confirm
+  that an action achieved its effect.
+- The screencap floor (~940 ms median raw on this hardware) is the
+  HARDWARE-BOUND limit per ADR-01a; it cannot be reduced without
+  changing the SENSE pipeline (minicap; deferred).
+- The match cost on a single full-frame grayscale template is
+  ~50 ms — small relative to capture.
+
+### Decision
+
+Accept the validation cost as a structural property of the v1.0
+orchestrator design. Reflect this in the NFRs via tier-split
+(search-only / validated / validated+retry) tick-latency budgets:
+see [`docs/frozen_nfrs_v1.md` §1.1](../docs/frozen_nfrs_v1.md#11-frozen-targets)
+(amended in Phase 5.5).
+
+Do NOT change ADR-08 (the structural choice) and do NOT change the
+Phase-5 implementation (the orchestrator is correct as-implemented).
+The amendment is bookkeeping: future readers should reach for the
+tier-split NFR table when reasoning about per-tick budget, not the
+single-tier 1500 ms claim that predated Phase 5.
+
+### Consequences
+
+- The frozen tick-latency NFRs are now a 3-tier table. See
+  `docs/frozen_nfrs_v1.md` §1.1 / §1.2.
+- The sustained-tick-rate NFR is also tier-split (0.5–1 Hz
+  search-only, 0.3–0.5 Hz validated). Realistic v1.0 throughput
+  for an interaction-heavy script (HIT on every tick → VALIDATE
+  on every tick) is therefore ~0.3 Hz, not the previously frozen
+  0.5–1 Hz blanket.
+- Phase 6 telemetry buckets must accommodate
+  `tick_duration_seconds` up to ~3.3 s without falling off the
+  end. The existing `[50, 100, 200, 400, 800, 1600, 3200, 6400]`
+  ms layout in `PHASE-MASTER-PROMPTS.md` Phase 6 is adequate;
+  rationale documented there.
+- Phase 7 soak tests must report tick-latency p50/p95 *per FSM
+  path*, not as a single distribution. Mixing search-only and
+  validated ticks into one distribution masks the validation cost.
+
+### Risks (and proposed v1.1+ work)
+
+- **Validation always pays for a full recapture.** Even on actions
+  whose effect is structurally unobservable in the template
+  (e.g. a future `key` action that emits a global hotkey), the
+  current orchestrator validates. v1.1 candidate: an
+  `Action.requires_validation: bool` annotation lets the actuator
+  skip the validation cycle.
+- **Validation is on the critical path.** A "deferred validation"
+  pattern — the post-action observation tick's natural capture
+  *is* the validation evidence — would move the validation cost
+  off the action-bearing tick into the next observation tick.
+  v1.1 candidate; would require a small FSM refactor (no library
+  change).
+- **In-frame diff.** A cheap pixel-diff between the search and
+  validation captures (ROI around the matched template) might
+  detect "did the screen change at all" without the full match.
+  v1.1 candidate; ADR-08a defers the design.
+- **Region-only re-capture.** ADB does not expose region capture;
+  any region-capture solution conflicts with ADR-02's raw-payload
+  invariants. Future research, not a v1.x deliverable.
+
+### Rejected alternatives — why
+
+- **Drop validation.** Validation is the only reason
+  `Action.success=True` actually means anything beyond "ADB exit
+  0". Dropping it would put the orchestrator in the position of
+  reporting success on actions that did nothing visible.
+- **Move validation into the orchestrator's next observation tick.**
+  Architecturally clean (it's the "deferred validation" v1.1
+  candidate above), but in v1.0 the FSM is single-template and
+  single-cycle; the deferred pattern needs multi-tick state
+  tracking that Phase 5 does not implement.
+- **Make validation optional per call.** Possible but adds a knob
+  that has no good default in v1.0 (the only existing action
+  classes — tap / swipe / long_press — all benefit from
+  validation). Defer until a `key`/`text` action needs it.
+
+### Phase-5 evidence
+
+| FSM path | Captures | Live tick latency (ms) |
+|---|---:|---:|
+| `IDLE → SEARCHING → FAILED` (Demo 1, search miss) | 1 | 1211 |
+| `IDLE → SEARCHING → ACTING → VALIDATING → FAILED` w/ retry (Demo 2) | 3 | 2956 |
+| `IDLE → SEARCHING → ACTING → VALIDATING → IDLE` w/ retry (Demo 3) | 3 | 2584 |
+
+Source: `phase5-report.md` §4.1.
 
 ---
 

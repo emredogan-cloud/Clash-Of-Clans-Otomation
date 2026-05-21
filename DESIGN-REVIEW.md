@@ -266,6 +266,10 @@ Tags:
 | 17 | future | Multi-resolution reference support (§1.2) | self | L |
 | 18 | future | Multi-device per host (§1.7) | self | XL |
 | 19 | future | A small TUI / web operator console (§13.4 of SYSTEM-ROADMAP) | self | M |
+| 20 | v1.1 | Cheaper validation strategy — deferred validation (post-action observation tick is the validation evidence). Largest expected speed win on this hardware. | Phase-5 discovery §10.1 | M |
+| 21 | v1.1 | Adaptive pre-validation delay per action class (reduce retry rate on slow animations) | Phase-5 discovery §10.3 | S |
+| 22 | v1.1 | In-frame diff validation (cheap SSIM/pixel-diff fallback before full re-match) | Phase-5 discovery §10.1 | M |
+| 23 | v1.1 | `Action.requires_validation: bool` annotation for action classes whose effect is structurally unobservable (key/text) | Phase-5 discovery §10.1 | S |
 
 ---
 
@@ -393,7 +397,160 @@ These are documented as **resolved** rather than residual concerns.
 
 ---
 
-## 10. Closing position
+## 10. Phase 5 discoveries (added 2026-05-21)
+
+This section is additive — added during Phase 5.5 Reality Sync to
+catalogue concerns surfaced by Phase 5's `Orchestrator` measurements
+that the pre-Phase-5 dossier did not anticipate. Same positioning
+convention as §9 (MITIGATE / ACCEPT / DEFER / INVESTIGATE), with
+v1.0 / v1.1 / future tags.
+
+### 10.1 Validation dominates tick cost (ACCEPT for v1.0; DEFER cheaper-validation to v1.1)
+
+**Discovery (VF):** the Phase-5 `Orchestrator.tick()` reaches
+`VALIDATING` on every successful `ACTING` step. The `VALIDATING`
+state is, by design, a full `Sensor.capture()` + `Matcher.match()`
+cycle — identical in cost to the `SEARCHING` state. On the
+operator's hardware that is ~990 ms per cycle (940 ms capture +
+50 ms match). With the single validation retry, a validated tick
+costs *up to 3 captures* (~3.0 s wall-clock).
+
+The frozen `tick_latency_median ≤ 1500 ms` NFR predated this
+design and was framed against `tick = SENSE + THINK + ACT`. It is
+violated on every validated tick.
+
+**Position — ACCEPT for v1.0.** The Phase-5 design is correct
+given the single-template constraint and the single-tick scope of
+Phase 5. NFRs were tier-split in Phase 5.5 (`docs/frozen_nfrs_v1.md`
+§1.1 amended) to reflect measurement honestly:
+
+- search-only tick: ≤ 1500 ms median (unchanged).
+- validated tick, no retry: ≤ 2200 ms median (new tier).
+- validated tick + retry: ≤ 3000 ms median, ≤ 3300 ms p95 (new tier).
+
+See [ADR-08a](./ADR.md#adr-08a--validation-cost-consequence-of-the-fsm-design-phase-55).
+
+**Residual concern (v1.1):** three candidate cheaper-validation
+strategies are documented but not implemented:
+
+1. *In-frame diff* — a cheap pixel/SSIM diff on the ROI around the
+   matched template detects "did the screen change at all" without
+   the full match. Cuts the match cost from a cycle but not the
+   capture cost.
+2. *Deferred validation* — the next observation tick's natural
+   capture *is* the validation evidence. Moves validation off the
+   action-bearing tick's critical path. Requires multi-tick state
+   tracking in the FSM.
+3. *No-validation action classes* — an `Action.requires_validation:
+   bool` annotation. Actions whose effect is structurally
+   unobservable (e.g. future `key`/`text` global hotkeys) skip the
+   cycle entirely.
+
+The biggest single win is (2). Tracked as v1.1 backlog (row #20 in §7).
+
+### 10.2 Single-retry budget proved its worth live (ACCEPT)
+
+**Discovery (VF):** during Phase 5's Demo 3 (engineered happy path)
+the **first** validation cycle caught a *mid-animation transition
+frame* — the recents-to-app launch animation was still playing,
+the recents template was partially visible, the match scored
+above threshold. The **retry** validation cycle (one sleep-and-
+recapture later) caught the settled frame; the template was
+cleanly absent and the tick was correctly marked as success.
+
+Without the retry, the orchestrator would have declared a
+validation failure on a tick that actually succeeded. The
+`VALIDATION_RETRY_BUDGET = 1` constant earned its place.
+
+**Position — ACCEPT.** The single retry is the right number for
+v1.0: zero retries would have produced a false negative on Demo 3;
+unlimited retries would mask actions that legitimately did not
+take effect. One retry is the smallest budget that handles the
+transition-frame edge case without hiding genuine failures.
+
+**Residual concern:** none in v1.0. Phase 7 soak should verify
+that the retry rate stays low (a high retry rate would suggest
+the animation/timing assumption is wrong for some scripts).
+
+### 10.3 Transition-frame reality (INVESTIGATE → Phase 7)
+
+**Discovery (UE):** Phase 5's Demo 3 showed that the *first*
+validation capture can land mid-animation. The animation duration
+is device- and app-dependent; on this device the recents-to-app
+animation appears to settle within ~1 capture cycle, i.e. ~940 ms.
+We do not have a measurement of the animation distribution.
+
+**Position — INVESTIGATE in Phase 7 soak.** Real scripts will
+encounter animations of varying durations. The Phase 7 soak
+should instrument the *retry rate* as a function of action class
+and target template; if retries cluster on specific scripts the
+operator can either widen pre-validation delay or split the action
+into sub-actions.
+
+**Residual concern (v1.1):** the framework currently has no
+adaptive pre-validation delay. A simple "wait N ms before
+validating" policy per action class would reduce the retry rate
+at the cost of tick latency. ADR-15 envelopes contemplate
+pre/post-delay but Phase 5 does not consume them. Tracked v1.1
+(row #21 in §7).
+
+### 10.4 Validation economics — capture cost dwarfs everything else (ACCEPT)
+
+**Discovery (VF):** decomposing a validated tick on this hardware:
+
+```
+search capture   ~940 ms  (46% of tick)
+search match     ~50 ms   (2%)
+action (tap)     ~60 ms   (3%)
+validate capture ~940 ms  (46%)
+validate match   ~50 ms   (2%)
+                 ─────────
+                 ~2040 ms (100% — happy path)
+```
+
+The capture cost dominates so completely that the only meaningful
+optimisation lever is *fewer captures per tick*. Per-template
+match cost (the natural place to look for cycle savings) is
+already near its floor.
+
+**Position — ACCEPT.** The implication is that v1.1's
+cheaper-validation strategies (§10.1) are the *only* path to
+faster validated ticks on this hardware. Optimising the matcher
+(adding mask support, multi-scale, etc.) would not move the tick
+latency needle materially.
+
+**Residual concern:** none for v1.0. Operators wanting faster
+ticks should follow the path documented in
+`docs/frozen_nfrs_v1.md` §1.3: minicap (deferred per ADR-01),
+scrcpy frame intercept (same), or USB 3.x hardware.
+
+### 10.5 Phase 5 narrowed scope vs original prompt (ACCEPT)
+
+**Discovery (factual):** the original `PHASE-MASTER-PROMPTS.md`
+Phase 5 specified a 13-state FSM (SYSTEM-ROADMAP §11 in full),
+plus `Script`, `Screen`, recovery cascade, CLI extension, Mermaid
+exporter, and heartbeat writer. The actual Phase 5 delivered the
+inner-slice 5-state FSM (`automation/state.py`) with no
+recovery cascade, no heartbeat, no Mermaid exporter, no CLI, no
+Script abstraction. Documented in `phase5-report.md` §2.4.
+
+**Position — ACCEPT.** The narrower scope was the operator's
+deliberate choice; it produced a smaller, fully tested,
+production-quality orchestrator core (333/333 tests, 94%
+coverage on `orchestrator.py`). The unimplemented surface —
+recovery cascade, heartbeat, Script, Mermaid exporter, CLI —
+lands in **Phase 7** (Hardening) per the existing
+PHASE-MASTER-PROMPTS structure. The Phase-5 prompt itself is
+not amended in Phase 5.5; the reconciliation happens when
+Phase 7 lands.
+
+**Residual concern:** none. The Phase 5.5 consistency audit
+(`docs/phase55_consistency_patch.md` §2.12) records this as an
+OPEN tracked-for-Phase-7 item.
+
+---
+
+## 11. Closing position
 
 The architecture, as documented, is a defensible v1 design. Its weaknesses are known, its assumptions are labeled, and its deferral list is real and acknowledged. The team should expect:
 

@@ -1,10 +1,10 @@
 # Frozen NFRs — v1.0
 
 > **Document type:** v1.0 non-functional requirement freeze
-> **Phase:** 0.5 — Reality Sync
-> **Date:** 2026-05-20
-> **Authority:** this document, together with the Phase 0 measurements at `phase-0-report.md`, is the source of truth for v1.0 NFRs. Where this document conflicts with [SYSTEM-ROADMAP.md §3](../SYSTEM-ROADMAP.md#3-non-functional-requirements), this document wins until a future ADR amends.
-> **Companion documents:** [phase-0-report.md](../phase-0-report.md), [docs/phase0_consistency_audit.md](./phase0_consistency_audit.md), [ADR.md ADR-01a](../ADR.md#adr-01a--screenshot-pipeline-phase-0-reality-content-dependent-ordering-usb-link-speed-prerequisite)
+> **Phase:** 0.5 — Reality Sync; amended in Phase 5.5 (tick-latency tier split, 2026-05-21)
+> **Date:** 2026-05-20 (Phase 0.5) · 2026-05-21 (Phase 5.5 amendment)
+> **Authority:** this document, together with the Phase 0 measurements at `phase-0-report.md` and the Phase 5 measurements at `phase5-report.md`, is the source of truth for v1.0 NFRs. Where this document conflicts with [SYSTEM-ROADMAP.md §3](../SYSTEM-ROADMAP.md#3-non-functional-requirements), this document wins until a future ADR amends.
+> **Companion documents:** [phase-0-report.md](../phase-0-report.md), [phase5-report.md](../phase5-report.md), [docs/phase0_consistency_audit.md](./phase0_consistency_audit.md), [docs/phase55_consistency_patch.md](./phase55_consistency_patch.md), [ADR.md ADR-01a](../ADR.md#adr-01a--screenshot-pipeline-phase-0-reality-content-dependent-ordering-usb-link-speed-prerequisite), [ADR.md ADR-08a](../ADR.md#adr-08a--validation-cost-consequence-of-the-fsm-design-phase-55)
 
 ---
 
@@ -40,31 +40,53 @@ Every binding number is one of:
 
 ### 1.1 Frozen targets
 
+> **Amended 2026-05-21 (Phase 5.5):** the single-tier tick-latency
+> row was tier-split into three. The original single-tier value
+> (≤ 1500 ms median / ≤ 2000 ms p95) was set by Phase 0 against an
+> implicit *tick = SENSE + THINK + ACT* model. The Phase 5
+> orchestrator's tick *also includes a validation cycle* — a full
+> recapture + rematch — which is structurally another ~990 ms on
+> this hardware. The new tiers separate ticks by FSM path. See
+> [ADR-08a](../ADR.md#adr-08a--validation-cost-consequence-of-the-fsm-design-phase-55)
+> for the architectural rationale, [phase5-report.md §4](../phase5-report.md)
+> for the source measurements, and §1.2 / §1.4 below for the
+> OLD/Phase-5/NEW history.
+
 | NFR | v1.0 target | Category | Source |
 |---|---|---|---|
-| Tick latency (median) | ≤ 1500 ms | HARDWARE-BOUND | screencap floor; phase-0-report §3 (VF) |
-| Tick latency (p95) | ≤ 2000 ms | HARDWARE-BOUND | screencap p95 + match + action budget (VF + UE) |
+| **Tick latency, search-only (median)** — FSM path `IDLE → SEARCHING → FAILED` (no HIT, no action, no validate) | ≤ 1500 ms | HARDWARE-BOUND | phase-0-report §3, phase5-report §4 (VF; Demo 1 measured 1211 ms) |
+| **Tick latency, search-only (p95)** | ≤ 1800 ms | HARDWARE-BOUND | phase-0-report §3 (VF + UE) |
+| **Tick latency, validated, no retry (median)** — FSM path `IDLE → SEARCHING → ACTING → VALIDATING → IDLE` with first validate succeeding | ≤ 2200 ms | HARDWARE-BOUND | `2 × screencap + 2 × match + action` arithmetic on Phase 0/3/4 medians (UE; not directly observed live — Phase 5's Demo 3 used the retry path) |
+| **Tick latency, validated, no retry (p95)** | ≤ 2500 ms | HARDWARE-BOUND | UE |
+| **Tick latency, validated with retry (median)** — FSM path includes one validate-retry cycle | ≤ 3000 ms | HARDWARE-BOUND | phase5-report §4 (VF; Demo 3 measured 2584 ms, Demo 2 measured 2956 ms) |
+| **Tick latency, validated with retry (p95)** | ≤ 3300 ms | HARDWARE-BOUND | phase5-report §4 (VF) |
 | Screenshot capture (median) | ≤ 1000 ms (`sensor.mode = "raw"`); ≤ 1500 ms across modes | HARDWARE-BOUND | phase-0-report §3 (VF) |
 | Screenshot capture (p95) | ≤ 1100 ms (`sensor.mode = "raw"`) | HARDWARE-BOUND | phase-0-report §3.1 (VF) |
 | Per-template match cost (median, ROI grayscale) | ≤ 5 ms | FRAMEWORK-BOUND | phase-0-report §4 (VF, measured 2.2 ms) |
 | Per-template match cost (median, ROI BGR) | ≤ 10 ms | FRAMEWORK-BOUND | phase-0-report §4 (VF, measured 7.0 ms) |
-| Per-template match cost (median, full-frame grayscale) | ≤ 50 ms | FRAMEWORK-BOUND | phase-0-report §4 (VF, measured 33.6 ms) |
+| Per-template match cost (median, full-frame grayscale) | ≤ 50 ms | FRAMEWORK-BOUND | phase-0-report §4 (VF, measured 33.6 ms; Phase 5 live 43–50 ms) |
 | Per-template match cost (median, full-frame BGR) | **opt-in only** — no NFR target. Triggers manifest-load WARN. | FRAMEWORK-BOUND | phase-0-report §4 (VF, measured 137.9 ms) |
 | Active template count per tick (default) | ≤ 8, ROI-required | FRAMEWORK-BOUND | composition of §3.1 row + cv2 budget (VF + UE) |
 | Active template count per tick (cap, with explicit opt-in) | ≤ 20 | FRAMEWORK-BOUND | unchanged from pre-Phase-0 (UE) |
-| Sustained tick rate (default) | 0.5–1 Hz | HARDWARE-BOUND | screencap floor (VF) |
+| Sustained tick rate (search-only, default) | 0.5–1 Hz | HARDWARE-BOUND | screencap floor (VF) |
+| Sustained tick rate (validated, default) | 0.3–0.5 Hz | HARDWARE-BOUND | composition of validated tick-latency rows (VF + UE) |
 | Sustained tick rate (achievable with minicap, future) | 3–10 Hz | UNCERTAIN (Phase 8+) | ADR-01a (UE, deferred) |
 
-### 1.2 OLD vs NEW comparison
+### 1.2 OLD vs Phase-0 vs NEW (Phase-5.5) comparison
 
-| NFR | OLD (pre-Phase-0, SYSTEM-ROADMAP §3.1) | NEW (v1.0 frozen) | Δ | Why |
+The history of every load-bearing performance NFR. OLD is the
+pre-Phase-0 engineering estimate (in `SYSTEM-ROADMAP.md §3.1` as
+the "OLD" column). Phase-0 is the value frozen at the end of
+Phase 0.5. NEW is the value frozen after Phase 5.5.
+
+| NFR | OLD (pre-Phase-0) | Phase-0 frozen (2026-05-20) | **NEW (Phase-5.5 frozen, 2026-05-21)** | Why the latest change |
 |---|---|---|---|---|
-| Tick latency (median) | ≤ 500 ms | ≤ 1500 ms | **3×** worse | screencap floor measured at ~1 s; pre-Phase-0 estimate assumed 80–250 ms raw screencap which did not hold |
-| Tick latency (p95) | ≤ 900 ms | ≤ 2000 ms | 2.2× worse | same |
-| Screenshot capture (median) | ≤ 250 ms | ≤ 1000 ms (raw) / ≤ 1500 ms (across modes) | 4–6× worse | USB transport floor + device-side composition cost; ADR-01a |
-| Per-template match cost (median) | ≤ 25 ms (1080×1920, full screen) | tier-split: ≤ 5/10/50 ms by variant | better for ROI, conditional for full-frame | ADR-03 clarification; ROI discipline mandatory |
-| Sustained tick rate (default) | 2–5 Hz | 0.5–1 Hz | 4–10× worse | bounded by screencap floor |
-| Concurrent template matches per tick (default) | ≤ 8 | ≤ 8, ROI-required | unchanged numerically; tightened on ROI | full-frame BGR ×8 = 1.1 s, exceeds MATCHING-state timeout |
+| Tick latency (median, generic "tick") | ≤ 500 ms | ≤ 1500 ms | **tier-split:** ≤ 1500 ms search-only / ≤ 2200 ms validated / ≤ 3000 ms validated+retry | Phase-0 estimate assumed `tick = SENSE+THINK+ACT`. Phase-5's orchestrator's tick *also* includes a full validation cycle (recapture + rematch), structurally adding ~990 ms; the retry adds another ~990 ms. See ADR-08a. |
+| Tick latency (p95, generic "tick") | ≤ 900 ms | ≤ 2000 ms | **tier-split:** ≤ 1800 ms search-only / ≤ 2500 ms validated / ≤ 3300 ms validated+retry | same |
+| Screenshot capture (median) | ≤ 250 ms | ≤ 1000 ms (raw) / ≤ 1500 ms (across modes) | unchanged | USB transport floor + device-side composition cost; ADR-01a |
+| Per-template match cost (median) | ≤ 25 ms (1080×1920, full screen) | tier-split: ≤ 5/10/50 ms by variant | unchanged | ADR-03 clarification; ROI discipline mandatory |
+| Sustained tick rate (default) | 2–5 Hz | 0.5–1 Hz (single tier) | **tier-split:** 0.5–1 Hz search-only / 0.3–0.5 Hz validated | composition of the new validated-tick latency tier; each validation cycle ~990 ms doubles tick cost vs search-only |
+| Concurrent template matches per tick (default) | ≤ 8 | ≤ 8, ROI-required | unchanged | full-frame BGR ×8 = 1.1 s, exceeds MATCHING-state timeout |
 
 ### 1.3 Implementer guidance
 
@@ -86,6 +108,34 @@ What is **always** in scope to chase, even on this hardware:
 - Reducing per-tick subprocess overhead by collapsing multiple
   `adb shell input` invocations.
 - Reducing post-action wait times where the action's effect is fast.
+- **(Phase 5.5 addition)** Reducing the validation cycle's cost.
+  Cheaper validation is the single largest available win after the
+  screencap floor itself. Candidate strategies (none implemented in
+  v1.0; tracked for v1.1):
+  - In-frame diff. The post-action observation tick's natural
+    capture already contains the validation evidence. Move
+    validation off the critical path of the action's own tick.
+  - Region-only re-capture. ADB does not expose region capture, but
+    a partial decode of the raw payload could short-circuit the
+    re-match (out of v1.0 scope; would conflict with ADR-02).
+  - No-validation action classes. A future `Action.requires_validation:
+    bool` annotation lets a `key`/`text` action skip the validation
+    cycle when the action's effect is structurally unobservable in
+    the screen template alone.
+
+### 1.4 Amendment history
+
+| When | What | Why |
+|---|---|---|
+| 2026-05-20 (Phase 0.5) | Tick latency frozen at ≤ 1500 ms median / ≤ 2000 ms p95 (single tier); screenshot, match-cost, tick-rate NFRs frozen | Phase 0 measurements invalidated pre-Phase-0 estimates; original NFRs assumed 80–250 ms screencap which did not hold on USB 2.0 |
+| 2026-05-21 (Phase 5.5) | Tick latency tier-split into search-only / validated / validated+retry; sustained-tick-rate tier-split; implementer guidance §1.3 updated with validation-cost reduction strategies | Phase 5's orchestrator's tick includes a full validation cycle (recapture + rematch); single-tier NFR is violated on every validated tick |
+
+Per §8 ("How to amend"), every change to this document must be
+backed by a measurement. Phase 5.5 references `phase5-report.md`
+§4 (the live 3-demo measurement set) as the source of truth. No
+NFR has been *loosened to hide* an implementation problem; the new
+tiers reflect the structural cost of the validation cycle, which
+is what the FSM (per ADR-08 + ADR-08a) requires.
 
 ---
 
@@ -163,7 +213,9 @@ downgrade the link by ~40×) and Phase 0.5 freezes a corresponding NFR.
 |---|---|---|
 | Screencap latency (median, p95) | `bench/screencap_bench.py` (already implemented) | Phase 0 ✓ |
 | Per-template match cost | `bench/match_bench.py` + Phase 3's manifest microbench | Phase 0 ✓ + Phase 3 |
-| Tick latency | end-to-end soak in Phase 5 + Phase 7 | Phase 5, Phase 7 |
+| Tick latency, search-only | end-to-end soak; Phase 5 single-tick live (Demo 1) confirms ≤ 1500 ms; Phase 7 soak confirms p95 | Phase 5 ✓ + Phase 7 |
+| Tick latency, validated (no retry) | Phase 5 single-tick live did not exercise this path directly (Demo 3 used the retry); arithmetic floor confirmed; Phase 7 soak measures p50/p95 | Phase 7 |
+| Tick latency, validated + retry | Phase 5 live confirms p50 ≈ 2.6 s, p95 ≈ 3.0 s (Demo 2/3); Phase 7 soak confirms at scale | Phase 5 ✓ + Phase 7 |
 | Sustained tick rate | Phase 7 24-hour soak | Phase 7 |
 | RAM / CPU steady-state | Phase 6 soak (1 hour) + Phase 7 (24 hour) | Phase 6, Phase 7 |
 | Reliability targets | Phase 7 (controlled faults) + Phase 8 (real operation) | Phase 7, Phase 8 |
@@ -181,9 +233,18 @@ Explicit non-freezes, to prevent re-debates:
 - **Detection accuracy NFRs** (§8 of SYSTEM-ROADMAP). Phase 0 did not
   measure detection rates. These remain engineering estimates until
   Phase 3 / Phase 8.
-- **Action engine latency NFRs** (§3.1 row "Tick latency" already
-  covers the composite, but individual `tap` / `swipe` latencies in
-  §5.4.1 are not yet measured). Phase 4 measures.
+- **Per-action latency NFRs** (individual `tap` / `swipe` /
+  `long_press`). **Measured in Phase 4** (`phase4-report.md` §4):
+  tap 58.8 ms median; swipe 369.9 ms median at 300 ms duration;
+  long_press 662.0 ms median at 600 ms hold. **Proposed-but-not-yet-frozen**
+  values in `phase4-report.md` §7.1 (≤ 100 ms tap median, ≤ 150 ms
+  tap p95, ≤ 120 ms swipe framework overhead, ≤ 100 ms long_press
+  framework overhead). Freezing requires an ADR amendment per §8.
+- **Cheaper-validation strategies.** §1.3 lists three candidate
+  strategies (in-frame diff, region-only re-capture, no-validation
+  action classes). None are implemented in v1.0; tracked as v1.1
+  backlog (DESIGN-REVIEW §7). Whichever strategy wins will move
+  the validated-tick NFR tier closer to the search-only tier.
 - **Multi-device scaling**. Out of scope for v1.0 by §2.2 of
   SYSTEM-ROADMAP. No NFRs frozen here.
 - **Wireless-ADB latency**. Out of scope per §2.2. No NFRs frozen.

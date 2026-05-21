@@ -152,17 +152,25 @@ measured, operator hardware):**
 | Capture round trip (steps 3–7) | 80–250 ms | **947 ms (raw, content-deterministic)** / 578–1311 ms (PNG, content-dependent) | USB transport + device-side `screencap` composition |
 | Parse + convert + resample (step 8) | 5–15 ms | UE — within range; Phase 2 microbench will confirm | CPU |
 | Template matching (step 12) | 5–50 ms × N templates | **2.2 ms (ROI gray) / 7.0 (ROI BGR) / 33.6 (full gray) / 137.9 (full BGR)** per template | CPU |
-| Action round trip (steps 17–22) | 80–200 ms | UE — Phase 4 measures; ADB shell overhead alone is 28 ms median (VF) | USB + `input` JVM bootstrap |
-| **Total per tick (default templates, ROI discipline)** | **~200–500 ms** typical | **~1.0–1.5 s** typical (UE) | — |
+| Action round trip (steps 17–22) | 80–200 ms | **58.8 ms tap median (Phase 4 ✓)** / 370 ms swipe / 662 ms long_press | USB + `input` JVM bootstrap |
+| **Total per tick — search-only** (no HIT, no action, no validate) | ~200–500 ms typical | **~1.0–1.2 s** median (Phase 5 Demo 1 measured 1211 ms ✓) | one capture + one match |
+| **Total per tick — validated, no retry** (HIT → action → 1 validate cycle) | (not modeled pre-Phase-5) | **~2.0–2.2 s** median (UE; arithmetic from per-layer medians) | two captures + two matches + one action |
+| **Total per tick — validated + retry** (HIT → action → 1st validate fails → retry validate) | (not modeled pre-Phase-5) | **~2.6–3.0 s** median (Phase 5 Demo 2 measured 2956 ms, Demo 3 measured 2584 ms ✓) | three captures + three matches + one action |
 
 Source: [phase-0-report.md](../phase-0-report.md) §3, §4, §5;
-[docs/frozen_nfrs_v1.md](../docs/frozen_nfrs_v1.md). USB 2.0 host
-(operator does not have a USB 3.x device).
+[phase4-report.md](../phase4-report.md) §4;
+[phase5-report.md](../phase5-report.md) §4;
+[docs/frozen_nfrs_v1.md](../docs/frozen_nfrs_v1.md) (amended Phase 5.5).
+USB 2.0 host (operator does not have a USB 3.x device).
 
 The OLD column is preserved for historical traceability. The NEW
 column is what an implementer or operator should plan against. v1.0
-frozen NFRs live in `docs/frozen_nfrs_v1.md`; v1.0 tick rate is
-0.5–1 Hz, not the pre-Phase-0 2–5 Hz.
+frozen NFRs live in `docs/frozen_nfrs_v1.md`. v1.0 tick rate is
+*tier-split* by FSM path: 0.5–1 Hz for search-only ticks, 0.3–0.5 Hz
+for validated ticks. The pre-Phase-0 2–5 Hz claim is not
+achievable on this hardware in either tier. See
+[ADR-08a](../ADR.md#adr-08a--validation-cost-consequence-of-the-fsm-design-phase-55)
+for the validation-cost rationale.
 
 ---
 

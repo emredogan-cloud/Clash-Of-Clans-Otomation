@@ -30,7 +30,13 @@ The framework automates interaction with the Android UI from a Linux desktop, us
 - **THINK** — OpenCV normalized template matching with masks, multi-scale fallback, and a resolution-independent reference frame (ADR-03/04/05);
 - **ACT** — `adb shell input` for taps/swipes/keys, with bounded jitter for robustness (ADR-06/15).
 
-The design optimizes for **stability, observability, and long-run operability**, not peak FPS. Target tick rate is **0.5–1 Hz** with end-to-end tick latency **~1.0–1.5 s median** on the operator's hardware (USB 2.0 host, Xiaomi 22095RA98C / Android 13). These numbers were originally projected as 2–5 Hz / 200–500 ms but were revised down by Phase 0 measurements; see [docs/frozen_nfrs_v1.md](./docs/frozen_nfrs_v1.md) for the v1.0 frozen NFRs and [ADR-01a](./ADR.md#adr-01a--screenshot-pipeline-phase-0-reality-content-dependent-ordering-usb-link-speed-prerequisite) for the screenshot-pipeline reality check. The framework is a single Python process supervised by an external watchdog, with a formal state machine as the orchestrator and a recorded-trace replay harness as the primary integration-test surface.
+The design optimizes for **stability, observability, and long-run operability**, not peak FPS. Target tick rates and latencies are *tier-split* by FSM path on the operator's hardware (USB 2.0 host, Xiaomi 22095RA98C / Android 13):
+
+- **Search-only ticks** (no HIT, no action, no validate): ~0.5–1 Hz, ~1.0–1.5 s median tick latency.
+- **Validated ticks** (HIT → action → 1 validate cycle): ~0.4–0.5 Hz, ~2.0–2.2 s median tick latency.
+- **Validated + retry ticks** (HIT → action → 1 validate fails → retry validate): ~0.3 Hz, ~2.5–3.0 s median tick latency.
+
+These numbers were originally projected as 2–5 Hz / 200–500 ms but were revised down by Phase 0 measurements, then tier-split by Phase 5 measurements; see [docs/frozen_nfrs_v1.md](./docs/frozen_nfrs_v1.md) for the v1.0 frozen NFRs (amended 2026-05-21), [ADR-01a](./ADR.md#adr-01a--screenshot-pipeline-phase-0-reality-content-dependent-ordering-usb-link-speed-prerequisite) for the screenshot-pipeline reality check, and [ADR-08a](./ADR.md#adr-08a--validation-cost-consequence-of-the-fsm-design-phase-55) for the validation-cost consequence of the FSM design. The framework is a single Python process supervised by an external watchdog, with a formal state machine as the orchestrator and a recorded-trace replay harness as the primary integration-test surface.
 
 The system is designed as a **generic UI automation framework**, with games and game-like interfaces as a reference use case. Use against any specific application is subject to that application's terms of service, which the framework cannot itself enforce and does not attempt to circumvent. Risk relating to ToS, account standing, and detection is discussed neutrally in §10 and is the operator's responsibility.
 
@@ -83,22 +89,44 @@ columns so the historical reasoning is auditable.
 
 ### 3.1 Performance
 
-| NFR | OLD (pre-Phase-0) | v1.0 frozen | Δ | Evaluation |
-|-----|-------------------|-------------|---|-----------|
-| Tick latency (median) | ≤ 500 ms | **≤ 1500 ms** | 3× worse | end-to-end SENSE→ACT; Phase 5/7 soak |
-| Tick latency (p95) | ≤ 900 ms | **≤ 2000 ms** | 2.2× worse | Phase 5/7 soak |
-| Screenshot capture (median) | ≤ 250 ms | **≤ 1000 ms (raw)** / ≤ 1500 ms across modes | 4–6× worse | Phase 0 ✓ |
-| Per-template match cost (median) | ≤ 25 ms (full screen) | **tier-split**: ≤ 5 ms (ROI gray), ≤ 10 ms (ROI BGR), ≤ 50 ms (full-frame gray); full-frame BGR opt-in only | tier-split | Phase 0 ✓ + Phase 3 |
-| Sustained tick rate (default) | 2–5 Hz | **0.5–1 Hz** | 4–10× worse | Phase 0 floor; Phase 7 soak |
-| Concurrent template matches per tick | ≤ 8 default, 20 cap | ≤ 8 default (ROI-required), 20 cap (opt-in) | tightened on ROI | configuration |
-| **USB link speed at bootstrap (new)** | — | **≥ 480 Mbps** | new NFR | Phase 1 bootstrap |
+> **Phase-5.5 amendment (2026-05-21):** the single-tier
+> `tick_latency` row in the v1.0 frozen column was tier-split into
+> three. The Phase-0 frozen value (≤ 1500 ms median / ≤ 2000 ms
+> p95) was framed against an implicit *tick = SENSE + THINK + ACT*
+> model. The Phase 5 orchestrator's tick also includes a validation
+> cycle (`VALIDATING` state: full recapture + rematch). The
+> validated tier is below; the full tier-split table is in
+> [`docs/frozen_nfrs_v1.md` §1.1](./docs/frozen_nfrs_v1.md#11-frozen-targets).
+> See [ADR-08a](./ADR.md#adr-08a--validation-cost-consequence-of-the-fsm-design-phase-55)
+> for the rationale, and [phase5-report.md §4](./phase5-report.md)
+> for the measurements.
 
-> **Why the regression**: USB transport floor + device-side `screencap`
-> composition cost dominate. See [phase-0-report.md §3](./phase-0-report.md)
-> and [ADR-01a](./ADR.md#adr-01a--screenshot-pipeline-phase-0-reality-content-dependent-ordering-usb-link-speed-prerequisite).
-> The regression is hardware-bound on this device class; minicap or
-> scrcpy frame intercept (deferred per ADR-01) would beat it but at
-> higher operational cost.
+| NFR | OLD (pre-Phase-0) | Phase-0 frozen (2026-05-20) | Phase-5.5 frozen (2026-05-21) | Evaluation |
+|-----|-------------------|-----------------------------|-------------------------------|-----------|
+| Tick latency, search-only (median) | ≤ 500 ms (single tier) | ≤ 1500 ms (single tier) | **≤ 1500 ms** (search-only) | Phase 5 Demo 1 measured 1211 ms ✓ |
+| Tick latency, search-only (p95) | ≤ 900 ms (single tier) | ≤ 2000 ms (single tier) | **≤ 1800 ms** (search-only) | Phase 7 soak |
+| Tick latency, validated, no retry (median) | (not split) | (not split) | **≤ 2200 ms** | arithmetic; Phase 5 Demo 3 used retry, see Phase 7 soak |
+| Tick latency, validated + retry (median) | (not split) | (not split) | **≤ 3000 ms** | Phase 5 Demo 2 measured 2956 ms, Demo 3 measured 2584 ms ✓ |
+| Tick latency, validated + retry (p95) | (not split) | (not split) | **≤ 3300 ms** | Phase 7 soak |
+| Screenshot capture (median) | ≤ 250 ms | **≤ 1000 ms (raw)** / ≤ 1500 ms across modes | unchanged | Phase 0 ✓ |
+| Per-template match cost (median) | ≤ 25 ms (full screen) | **tier-split**: ≤ 5 ms (ROI gray), ≤ 10 ms (ROI BGR), ≤ 50 ms (full-frame gray); full-frame BGR opt-in only | unchanged | Phase 0 ✓ + Phase 3 ✓ |
+| Sustained tick rate, search-only (default) | 2–5 Hz | 0.5–1 Hz (single tier) | **0.5–1 Hz** (search-only) | Phase 0 floor; Phase 7 soak |
+| Sustained tick rate, validated (default) | (not split) | (not split) | **0.3–0.5 Hz** | composition of validated-tick latency tier |
+| Concurrent template matches per tick | ≤ 8 default, 20 cap | ≤ 8 default (ROI-required), 20 cap (opt-in) | unchanged | configuration |
+| **USB link speed at bootstrap (new)** | — | **≥ 480 Mbps** | unchanged | Phase 1 bootstrap ✓ |
+
+> **Why the regression vs OLD**: USB transport floor + device-side
+> `screencap` composition cost dominate. See
+> [phase-0-report.md §3](./phase-0-report.md) and
+> [ADR-01a](./ADR.md#adr-01a--screenshot-pipeline-phase-0-reality-content-dependent-ordering-usb-link-speed-prerequisite).
+>
+> **Why the tier-split vs Phase-0 frozen**: the Phase-0 frozen
+> tick-latency NFR was framed for "tick = SENSE + THINK + ACT".
+> Phase 5 implemented the actual `Orchestrator.tick()`, which adds
+> a validation cycle (`VALIDATING` state, full recapture + rematch
+> per ADR-08 + ADR-08a). Each validation cycle adds ~990 ms on
+> this hardware; the retry adds another ~990 ms. The tier-split
+> reflects measurement, not an NFR loosening.
 
 ### 3.2 Resource usage
 
@@ -411,6 +439,16 @@ The state machine is the *one* place where domain logic lives. Everything else i
 - The state machine decides all of the above.
 
 A typical interaction script is *not* a sequence of Python calls; it is a set of state declarations consumed by the state machine.
+
+> **Phase-5.5 note (2026-05-21):** the `VALIDATING` state is, by
+> design, a full recapture + rematch cycle (no cheaper validation
+> is available in v1.0). This roughly doubles per-tick capture
+> cost vs a search-only tick, and with the single validation
+> retry can triple it. See [ADR-08a](./ADR.md#adr-08a--validation-cost-consequence-of-the-fsm-design-phase-55)
+> for the architectural rationale and the candidate cheaper-
+> validation strategies (deferred to v1.1+); see
+> [`docs/frozen_nfrs_v1.md` §1.1](./docs/frozen_nfrs_v1.md#11-frozen-targets)
+> for the tier-split tick-latency NFR that this implies.
 
 ### 5.6 Observability
 
@@ -732,13 +770,24 @@ These are out of scope by design and by intent.
 | OBSERVING | active | Acquire a frame for the current tick | from READY, WAITING, VALIDATING | frame captured → MATCHING | 2 s | → RECONNECTING (counter) | 3 fails → escalate |
 | MATCHING | active | Run THINK on the frame | from OBSERVING | match results computed → ACTING / WAITING / RECOVERING | 500 ms | → RECOVERING | n/a (CPU-bound) |
 | ACTING | active | Send one ADB input | from MATCHING | input subprocess exits → VALIDATING | 2 s | → RECOVERING (counter) | 3 fails → escalate |
-| VALIDATING | active | Confirm action took effect | from ACTING | expected-state template HITs → OBSERVING; else → RECOVERING | 2 s | → RECOVERING (counter) | 3 fails → escalate |
+| VALIDATING | active | Confirm action took effect | from ACTING | expected-state template HITs → OBSERVING; else → RECOVERING | 2 s ¹ | → RECOVERING (counter) | 3 fails → escalate |
 | WAITING | passive | Scheduled delay before next observation | from MATCHING (when state requires waiting) | delay elapsed → OBSERVING | per spec | → OBSERVING | none |
 | RECOVERING | meta | Decide next recovery step | from MATCHING, ACTING, VALIDATING, OBSERVING | recovery policy resolves → RESET_LITE / RESET_HARD / FAULTED | 5 s | → FAULTED | none |
 | RESET_LITE | active | Soft recovery: back-button, dismiss-modal | from RECOVERING | back-to-known-state → OBSERVING; failure → RESET_HARD | 5 s | → RESET_HARD | 2 attempts |
 | RESET_HARD | active | Hard recovery: ADB restart + reconnect | from RECOVERING, RESET_LITE | ADB back online → CONNECTING | 30 s | → FAULTED | 1 attempt |
 | RECONNECTING | active | ADB server bounce, re-handshake | from CONNECTING, OBSERVING | adb server responsive → CONNECTING | 30 s | → FAULTED | 2 attempts |
 | FAULTED | terminal | Unrecoverable; process exits | from anywhere | process exits | — | — | watchdog restart |
+
+> ¹ **VALIDATING timeout — Phase-5.5 note (2026-05-21):** the 2 s
+> timeout is **per state entry** but the state may run two capture
+> + match cycles in sequence (initial validate + one retry).
+> Phase-5 live measurements show ~990 ms per cycle on this
+> hardware, so the worst case is ~1.98 s — *tight* inside 2 s.
+> Phase 6, when it adds explicit timeout enforcement, should raise
+> the `VALIDATING` timeout to **3000 ms** (one full retry cycle
+> plus a small head-room margin) OR re-scope the timeout as
+> "per-cycle, not per-state". Tracked in
+> [`docs/phase55_consistency_patch.md` §2.9](./docs/phase55_consistency_patch.md).
 
 ### 11.2 Transition table (selected high-value paths)
 
