@@ -1,0 +1,50 @@
+{
+  "anchors_ref": {
+    "demo_2_homescreen": [
+      652,
+      1452
+    ],
+    "demo_3_recents": [
+      598,
+      560
+    ]
+  },
+  "demo_1_search_miss": {
+    "action_latency_ms": null,
+    "capture_latency_ms": 1157.991579,
+    "match_latency_ms": 50.277506,
+    "state_after": "FAILED",
+    "state_before": "IDLE",
+    "success": false,
+    "tick_latency_ms": 1211.189938,
+    "ts": "2026-05-21T01:38:11.895843+00:00"
+  },
+  "demo_2_homescreen_patch": {
+    "action_latency_ms": 70.465818,
+    "capture_latency_ms": 951.838105,
+    "match_latency_ms": 47.988637,
+    "state_after": "FAILED",
+    "state_before": "IDLE",
+    "success": false,
+    "tick_latency_ms": 2956.235508,
+    "ts": "2026-05-21T01:38:16.500821+00:00"
+  },
+  "demo_3_recents_card": {
+    "action_latency_ms": 60.687938,
+    "capture_latency_ms": 907.018022,
+    "match_latency_ms": 48.866633,
+    "state_after": "IDLE",
+    "state_before": "IDLE",
+    "success": true,
+    "tick_latency_ms": 2584.38664,
+    "ts": "2026-05-21T01:38:22.851066+00:00"
+  },
+  "device_native": [
+    1080,
+    2408
+  ],
+  "reference": [
+    1080,
+    1920
+  ]
+}

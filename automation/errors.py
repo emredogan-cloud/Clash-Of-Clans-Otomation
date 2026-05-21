@@ -137,3 +137,39 @@ class ActionExecutionError(ActuatorError):
     ADB layer's exception hierarchy directly. Coordinate-level
     validation does not raise this; it raises `CoordinateError` first.
     """
+
+
+# ---------------------------------------------------------------------------
+# Orchestrator (Phase 5)
+# ---------------------------------------------------------------------------
+
+
+class OrchestratorError(AutomationError):
+    """Base class for errors raised inside the orchestrator / FSM."""
+
+
+class InvalidTransitionError(OrchestratorError):
+    """An FSM transition was attempted that is not allowed.
+
+    Raised when the orchestrator is asked to move from a state to one
+    not in its allowed-transitions table (e.g. `tick()` invoked while
+    in `FAILED`, or `reset()` invoked while in a non-`FAILED` state).
+    The FSM is fully explicit; there are no hidden recovery paths in
+    Phase 5.
+    """
+
+
+class ValidationError(OrchestratorError):
+    """A post-action validation cycle exhausted its single retry budget.
+
+    After ACTING completes, the orchestrator re-captures and re-matches.
+    If the template is still present (i.e. the action did not achieve
+    the expected state change), one extra capture+match is attempted.
+    If that also fails, the orchestrator transitions to `FAILED` and a
+    `ValidationError` describes the situation in logs / artifacts.
+
+    The exception is exposed as a typed contract for Phase 6+
+    observability; the Phase 5 `tick()` does NOT raise it — failures
+    surface via `TickResult.success=False`. Future phases that want
+    raising semantics can opt in.
+    """
