@@ -541,3 +541,284 @@ def test_two_successive_ticks_use_independent_state(
     # Total matcher calls = 3 (tick1) + 2 (tick2) = 5.
     assert matcher.calls == 5
     assert r2.success is True
+
+
+# =============================================================================
+# Phase 6 instrumentation hooks
+# =============================================================================
+
+
+from automation.correlation import CorrelationId
+from automation.logger import StructuredLogger
+from automation.metrics import MetricsCollector
+
+
+def _fixed_correlation_factory(value: str = "tick_20260521T140000_aaaaaa"):
+    """A correlation-id factory that emits a deterministic id sequence."""
+    seq = [value, "tick_20260521T140001_bbbbbb", "tick_20260521T140002_cccccc"]
+    counter = {"i": 0}
+
+    def factory() -> CorrelationId:
+        i = counter["i"]
+        counter["i"] = i + 1
+        return CorrelationId(seq[i % len(seq)])
+
+    return factory
+
+
+def test_orchestrator_works_without_any_instrumentation() -> None:
+    """Phase 5 behaviour preserved: tick() runs identically with no logger/metrics."""
+    orch, *_ = _build_orch(matches=[_make_hit(), _make_miss()])
+    r = orch.tick()
+    assert r.success is True
+    # No logger/metrics provided; nothing crashed.
+
+
+def test_orchestrator_generates_correlation_id_per_tick() -> None:
+    seen: list[CorrelationId] = []
+    def factory() -> CorrelationId:
+        cid = CorrelationId(f"tick_20260521T140000_a{len(seen):05d}")
+        seen.append(cid)
+        return cid
+    sensor = MockSensor(frames=[_make_frame(), _make_frame(), _make_frame(), _make_frame()])
+    matcher = MockMatcher(results=[_make_hit(), _make_miss(), _make_hit(), _make_miss()])
+    actuator = MockActuator(results=[_make_action(), _make_action()], calls=[])
+    orch = Orchestrator(
+        sensor,  # type: ignore[arg-type]
+        matcher,  # type: ignore[arg-type]
+        actuator,  # type: ignore[arg-type]
+        _make_template(),
+        correlation_id_factory=factory,
+    )
+    orch.tick()
+    orch.tick()
+    assert len(seen) == 2
+    assert seen[0] != seen[1]
+
+
+def test_logger_hook_writes_tick_record(tmp_path: Path) -> None:
+    log_dir = tmp_path / "logs"
+    log_dir.mkdir()
+    logger = StructuredLogger(logs_dir=log_dir)
+    sensor = MockSensor(frames=[_make_frame(), _make_frame()])
+    matcher = MockMatcher(results=[_make_hit(), _make_miss()])
+    actuator = MockActuator(results=[_make_action()], calls=[])
+    orch = Orchestrator(
+        sensor,  # type: ignore[arg-type]
+        matcher,  # type: ignore[arg-type]
+        actuator,  # type: ignore[arg-type]
+        _make_template(),
+        logger=logger,
+        correlation_id_factory=_fixed_correlation_factory(),
+    )
+    orch.tick()
+    log_lines = (log_dir / "ticks.jsonl").read_text().splitlines()
+    assert len(log_lines) == 1
+    record = json.loads(log_lines[0])
+    assert record["correlation_id"] == "tick_20260521T140000_aaaaaa"
+    assert record["state_before"] == "IDLE"
+    assert record["state_after"] == "IDLE"
+    assert record["success"] is True
+    assert record["retries_used"] == 0
+    assert record["tier"] == "validated"
+    assert record["template"] == "demo"
+
+
+def test_logger_hook_failure_does_not_break_tick(tmp_path: Path) -> None:
+    """Logger raising mid-tick must not break the orchestrator."""
+    class _BrokenLogger:
+        def log_tick(self, **kwargs):  # noqa: D401, ANN003
+            raise RuntimeError("disk full")
+
+    orch_args = _build_orch(matches=[_make_hit(), _make_miss()])
+    orch = orch_args[0]
+    orch.logger = _BrokenLogger()  # type: ignore[assignment]
+    r = orch.tick()
+    assert r.success is True  # tick still produced its result
+
+
+def test_metrics_hook_observes_tick_action_match() -> None:
+    metrics = MetricsCollector()
+    sensor = MockSensor(frames=[_make_frame(), _make_frame()])
+    matcher = MockMatcher(results=[_make_hit(), _make_miss()])
+    actuator = MockActuator(results=[_make_action()], calls=[])
+    orch = Orchestrator(
+        sensor,  # type: ignore[arg-type]
+        matcher,  # type: ignore[arg-type]
+        actuator,  # type: ignore[arg-type]
+        _make_template(),
+        metrics=metrics,
+        correlation_id_factory=_fixed_correlation_factory(),
+    )
+    orch.tick()
+    cv = metrics.counters_view()
+    assert cv["ticks_total"] == 1
+    assert cv["ticks_success"] == 1
+    assert cv["matches_total"] == 1  # search match (initial only counted in tick observation)
+    assert cv["actions_total"] == 1
+    assert cv["validation_ticks"] == 1
+
+
+def test_metrics_hook_tier_search_only_on_search_miss() -> None:
+    metrics = MetricsCollector()
+    sensor = MockSensor(frames=[_make_frame()])
+    matcher = MockMatcher(results=[_make_miss()])
+    actuator = MockActuator(results=[], calls=[])
+    orch = Orchestrator(
+        sensor,  # type: ignore[arg-type]
+        matcher,  # type: ignore[arg-type]
+        actuator,  # type: ignore[arg-type]
+        _make_template(),
+        metrics=metrics,
+        correlation_id_factory=_fixed_correlation_factory(),
+    )
+    orch.tick()
+    snap = metrics.snapshot()
+    assert snap["tick_histograms"]["search_only"]["count"] == 1
+    assert snap["tick_histograms"]["validated"]["count"] == 0
+    assert snap["tick_histograms"]["validated_retry"]["count"] == 0
+
+
+def test_metrics_hook_tier_validated_retry_on_retry_used() -> None:
+    metrics = MetricsCollector()
+    sensor = MockSensor(frames=[_make_frame(), _make_frame(), _make_frame()])
+    matcher = MockMatcher(results=[_make_hit(), _make_hit(), _make_miss()])  # retry needed
+    actuator = MockActuator(results=[_make_action()], calls=[])
+    orch = Orchestrator(
+        sensor,  # type: ignore[arg-type]
+        matcher,  # type: ignore[arg-type]
+        actuator,  # type: ignore[arg-type]
+        _make_template(),
+        metrics=metrics,
+        correlation_id_factory=_fixed_correlation_factory(),
+    )
+    orch.tick()
+    snap = metrics.snapshot()
+    assert snap["tick_histograms"]["validated_retry"]["count"] == 1
+    cv = metrics.counters_view()
+    assert cv["retries_total"] == 1
+    assert cv["validation_ticks"] == 1
+
+
+def test_metrics_hook_failure_does_not_break_tick() -> None:
+    class _BrokenMetrics:
+        def observe_tick(self, **kwargs):  # noqa: D401, ANN003
+            raise RuntimeError("broken")
+        def observe_action(self, **kwargs):  # noqa: D401, ANN003
+            pass
+        def observe_match(self, **kwargs):  # noqa: D401, ANN003
+            pass
+
+    orch_args = _build_orch(matches=[_make_hit(), _make_miss()])
+    orch = orch_args[0]
+    orch.metrics = _BrokenMetrics()  # type: ignore[assignment]
+    r = orch.tick()
+    assert r.success is True
+
+
+def test_artifact_includes_correlation_id_and_tier(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The Phase-6 artifact schema adds correlation_id and tier."""
+    artifacts = tmp_path / "var" / "artifacts" / "orchestrator"
+    monkeypatch.setattr("automation.orchestrator.ARTIFACTS_DIR", artifacts)
+    sensor = MockSensor(frames=[_make_frame(), _make_frame()])
+    matcher = MockMatcher(results=[_make_hit(), _make_miss()])
+    actuator = MockActuator(results=[_make_action()], calls=[])
+    orch = Orchestrator(
+        sensor,  # type: ignore[arg-type]
+        matcher,  # type: ignore[arg-type]
+        actuator,  # type: ignore[arg-type]
+        _make_template(),
+        correlation_id_factory=_fixed_correlation_factory(),
+        debug=True,
+    )
+    orch.tick()
+    subdirs = list(artifacts.iterdir())
+    assert len(subdirs) == 1
+    d = subdirs[0]
+    # New directory naming: <correlation_id>_<verdict>_<tier>
+    assert d.name == "tick_20260521T140000_aaaaaa_ok_validated"
+    md = json.loads((d / "metadata.json").read_text())
+    assert md["correlation_id"] == "tick_20260521T140000_aaaaaa"
+    assert md["tier"] == "validated"
+
+
+def test_artifact_tier_search_only_on_miss(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    artifacts = tmp_path / "var" / "artifacts" / "orchestrator"
+    monkeypatch.setattr("automation.orchestrator.ARTIFACTS_DIR", artifacts)
+    sensor = MockSensor(frames=[_make_frame()])
+    matcher = MockMatcher(results=[_make_miss()])
+    actuator = MockActuator(results=[], calls=[])
+    orch = Orchestrator(
+        sensor,  # type: ignore[arg-type]
+        matcher,  # type: ignore[arg-type]
+        actuator,  # type: ignore[arg-type]
+        _make_template(),
+        correlation_id_factory=_fixed_correlation_factory(),
+        debug=True,
+    )
+    orch.tick()
+    d = next(iter(artifacts.iterdir()))
+    assert d.name == "tick_20260521T140000_aaaaaa_fail_search_only"
+    md = json.loads((d / "metadata.json").read_text())
+    assert md["tier"] == "search_only"
+
+
+def test_artifact_tier_validated_retry_when_retry_used(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    artifacts = tmp_path / "var" / "artifacts" / "orchestrator"
+    monkeypatch.setattr("automation.orchestrator.ARTIFACTS_DIR", artifacts)
+    sensor = MockSensor(frames=[_make_frame(), _make_frame(), _make_frame()])
+    matcher = MockMatcher(results=[_make_hit(), _make_hit(), _make_miss()])
+    actuator = MockActuator(results=[_make_action()], calls=[])
+    orch = Orchestrator(
+        sensor,  # type: ignore[arg-type]
+        matcher,  # type: ignore[arg-type]
+        actuator,  # type: ignore[arg-type]
+        _make_template(),
+        correlation_id_factory=_fixed_correlation_factory(),
+        debug=True,
+    )
+    orch.tick()
+    d = next(iter(artifacts.iterdir()))
+    assert "_validated_retry" in d.name
+    md = json.loads((d / "metadata.json").read_text())
+    assert md["tier"] == "validated_retry"
+    assert md["retries_used"] == 1
+
+
+def test_correlation_id_is_propagated_to_logger_and_artifact(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One tick → same correlation id in logs AND artifacts."""
+    artifacts = tmp_path / "art"
+    log_dir = tmp_path / "logs"
+    log_dir.mkdir()
+    monkeypatch.setattr("automation.orchestrator.ARTIFACTS_DIR", artifacts)
+    logger = StructuredLogger(logs_dir=log_dir)
+    sensor = MockSensor(frames=[_make_frame(), _make_frame()])
+    matcher = MockMatcher(results=[_make_hit(), _make_miss()])
+    actuator = MockActuator(results=[_make_action()], calls=[])
+    orch = Orchestrator(
+        sensor,  # type: ignore[arg-type]
+        matcher,  # type: ignore[arg-type]
+        actuator,  # type: ignore[arg-type]
+        _make_template(),
+        logger=logger,
+        correlation_id_factory=_fixed_correlation_factory(),
+        debug=True,
+    )
+    orch.tick()
+    log_record = json.loads((log_dir / "ticks.jsonl").read_text().splitlines()[0])
+    artifact_dir = next(iter(artifacts.iterdir()))
+    md = json.loads((artifact_dir / "metadata.json").read_text())
+    assert log_record["correlation_id"] == md["correlation_id"]
+    assert artifact_dir.name.startswith(log_record["correlation_id"])

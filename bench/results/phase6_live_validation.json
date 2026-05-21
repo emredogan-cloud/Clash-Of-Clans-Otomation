@@ -1,0 +1,42 @@
+{
+  "artifact_rotation": {
+    "deleted": 0,
+    "retained": 10,
+    "total_bytes_after": 10531
+  },
+  "log_rotation": {},
+  "metrics_counters": {
+    "actions_total": 4,
+    "matches_total": 10,
+    "retries_total": 2,
+    "ticks_failed": 6,
+    "ticks_success": 4,
+    "ticks_total": 10,
+    "validation_ticks": 4
+  },
+  "overhead": {
+    "n_iterations": 300,
+    "overhead_per_tick_ms_mean": 2.081802436666667,
+    "overhead_per_tick_ms_median": 1.824976,
+    "overhead_per_tick_ms_p95": 3.348191
+  },
+  "tick_count": 10,
+  "tick_latencies_ms": [
+    1212.456009,
+    898.74598,
+    1024.63737,
+    1004.128572,
+    1961.44093,
+    1153.69629,
+    913.762894,
+    1873.81079,
+    3081.023986,
+    2863.22977
+  ],
+  "tick_median_ms": 1183.0761495000002,
+  "tier_counts": {
+    "search_only": 6,
+    "validated": 2,
+    "validated_retry": 2
+  }
+}

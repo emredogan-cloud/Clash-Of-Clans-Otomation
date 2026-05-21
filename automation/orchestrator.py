@@ -39,11 +39,12 @@ import os
 import shutil
 import tempfile
 import time
-import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from .correlation import CorrelationId, new_id as new_correlation_id
 from .errors import InvalidTransitionError
+from .metrics import derive_tier
 from .paths import ARTIFACTS
 from .state import ALLOWED_TRANSITIONS, State
 from .tick_result import TickResult
@@ -52,10 +53,13 @@ if TYPE_CHECKING:  # pragma: no cover — typing only
     from .action_result import ActionResult
     from .actuator import Actuator
     from .frame import Frame
+    from .logger import StructuredLogger
     from .match_result import MatchResult
     from .matcher import Matcher
+    from .metrics import MetricsCollector
     from .sensor import Sensor
     from .template import Template
+    from typing import Callable
 
 _LOG = logging.getLogger(__name__)
 
@@ -88,19 +92,44 @@ class Orchestrator:
 
     Constructor params:
 
-    - `sensor`     : a `Sensor` instance.
-    - `matcher`    : a `Matcher` instance.
-    - `actuator`   : an `Actuator` instance.
-    - `template`   : the single `Template` to search/validate against.
-    - `debug`      : write per-tick metadata to
-                     `var/artifacts/orchestrator/`. If `None`, consults
-                     `ORCH_DEBUG` env var at construction time only
-                     (ADR-13: no runtime config mutation).
+    - `sensor`         : a `Sensor` instance.
+    - `matcher`        : a `Matcher` instance.
+    - `actuator`       : an `Actuator` instance.
+    - `template`       : the single `Template` to search/validate against.
+    - `logger`         : optional `StructuredLogger`. If supplied,
+                         every tick emits one record to `ticks.jsonl`,
+                         and any framework-level errors raised during
+                         the tick path emit one record to
+                         `errors.jsonl`. Phase 6 instrumentation; not
+                         required.
+    - `metrics`        : optional `MetricsCollector`. If supplied,
+                         every tick / action / match is observed
+                         (counter + per-tier histogram). Phase 6
+                         instrumentation; not required.
+    - `correlation_id_factory` : optional zero-arg callable returning
+                         a `CorrelationId` for the next tick.
+                         Defaults to `correlation.new_id`. Override
+                         in tests for deterministic ids.
+    - `debug`          : write per-tick metadata to
+                         `var/artifacts/orchestrator/`. If `None`,
+                         consults `ORCH_DEBUG` env var at construction
+                         time only (ADR-13: no runtime config mutation).
 
     Threading: the orchestrator is single-threaded. Phase 5 does not
     introduce asyncio; the underlying sensor / matcher / actuator are
     invoked synchronously. Phase 6+ can wrap `tick()` in a coroutine
     when the loop arrives.
+
+    Instrumentation philosophy (Phase 6, ADR-12):
+
+    - The instrumentation *wraps*, not redesigns, the FSM. Every
+      transition still routes through `_transition`; that method
+      remains the chokepoint.
+    - All three observability sinks (logger, metrics, artifacts)
+      are *optional*. The orchestrator works correctly without any
+      of them — the Phase 5 behaviour is preserved exactly.
+    - Errors raised inside the instrumentation path are logged at
+      WARN and swallowed; instrumentation cannot break the tick.
     """
 
     def __init__(
@@ -110,6 +139,9 @@ class Orchestrator:
         actuator: "Actuator",
         template: "Template",
         *,
+        logger: "StructuredLogger | None" = None,
+        metrics: "MetricsCollector | None" = None,
+        correlation_id_factory: "Callable[[], CorrelationId] | None" = None,
         debug: bool | None = None,
     ) -> None:
         self.sensor: "Sensor" = sensor
@@ -117,6 +149,14 @@ class Orchestrator:
         self.actuator: "Actuator" = actuator
         self.template: "Template" = template
         self._state: State = State.IDLE
+        self.logger: "StructuredLogger | None" = logger
+        self.metrics: "MetricsCollector | None" = metrics
+        self._correlation_id_factory: "Callable[[], CorrelationId]" = (
+            correlation_id_factory
+            if correlation_id_factory is not None
+            else new_correlation_id
+        )
+        self._current_correlation_id: "CorrelationId | None" = None
         self.debug: bool = (
             debug if debug is not None else _parse_bool_env("ORCH_DEBUG")
         )
@@ -176,6 +216,10 @@ class Orchestrator:
                 f"call reset() first"
             )
         state_before = self._state
+        # One correlation id per tick. Held on the instance so the
+        # artifact writer and any instrumentation hook downstream can
+        # read it without threading it through every internal helper.
+        self._current_correlation_id = self._correlation_id_factory()
         t_start = time.perf_counter_ns()
 
         # IDLE → SEARCHING ---------------------------------------------
@@ -355,14 +399,65 @@ class Orchestrator:
             action_latency_ms=action_latency_ms,
             ts=ts,
         )
+        # Tier derivation drives metrics and artifact naming. See
+        # `metrics.derive_tier` for the rule; the orchestrator owns
+        # the observables (action_ran / validation_ran / retries_used).
+        tier = derive_tier(
+            action_ran=action_result is not None,
+            validation_ran=validation_match is not None,
+            retries_used=retries_used,
+        )
+        correlation_id = self._current_correlation_id
+        # `correlation_id` is guaranteed non-None here because tick()
+        # generates it before entering SEARCHING and _finalize is only
+        # reached from inside tick().
+        assert correlation_id is not None
+
         _LOG.debug(
             "tick complete: %s tick=%.2f ms (capture=%.2f match=%.2f action=%s) "
-            "retries=%d",
+            "retries=%d tier=%s correlation_id=%s",
             result.summary(),
             tick_latency_ms, capture_latency_ms, match_latency_ms,
             f"{action_latency_ms:.2f}" if action_latency_ms is not None else "—",
-            retries_used,
+            retries_used, tier, correlation_id,
         )
+
+        # Structured log — best-effort.
+        if self.logger is not None:
+            try:
+                self.logger.log_tick(
+                    correlation_id=correlation_id,
+                    state_before=result.state_before.value,
+                    state_after=result.state_after.value,
+                    success=result.success,
+                    tick_latency_ms=result.tick_latency_ms,
+                    capture_latency_ms=result.capture_latency_ms,
+                    match_latency_ms=result.match_latency_ms,
+                    action_latency_ms=result.action_latency_ms,
+                    retries_used=retries_used,
+                    ts=result.ts,
+                    extra={"tier": tier, "template": self.template.name},
+                )
+            except Exception as exc:  # noqa: BLE001 — best-effort sink
+                _LOG.warning("structured log failed: %s", exc)
+
+        # Metrics — best-effort.
+        if self.metrics is not None:
+            try:
+                self.metrics.observe_tick(
+                    latency_ms=result.tick_latency_ms,
+                    tier=tier,
+                    success=result.success,
+                    retries_used=retries_used,
+                )
+                self.metrics.observe_match(latency_ms=result.match_latency_ms)
+                if action_result is not None:
+                    self.metrics.observe_action(
+                        action_type=action_result.action_type,
+                        latency_ms=action_result.latency_ms,
+                    )
+            except Exception as exc:  # noqa: BLE001 — best-effort sink
+                _LOG.warning("metrics observation failed: %s", exc)
 
         if self.debug:
             self._write_artifacts(
@@ -371,6 +466,8 @@ class Orchestrator:
                 action_result=action_result,
                 validation_match=validation_match,
                 retries_used=retries_used,
+                correlation_id=correlation_id,
+                tier=tier,
             )
         return result
 
@@ -384,12 +481,16 @@ class Orchestrator:
         action_result: "ActionResult | None",
         validation_match: "MatchResult | None",
         retries_used: int,
+        correlation_id: CorrelationId,
+        tier: str,
     ) -> None:
         """Write `metadata.json` for the tick. Best-effort; never raises.
 
         Schema (one file per tick, atomic write):
 
             {
+              "correlation_id": str,
+              "tier": "search_only" | "validated" | "validated_retry",
               "tick": {
                 "state_before": "IDLE",
                 "state_after":  "IDLE" | "FAILED",
@@ -406,17 +507,19 @@ class Orchestrator:
               "validation_match": <MatchResult.to_debug_dict> | null,
               "retries_used": int
             }
+
+        The directory name embeds the correlation id so artifacts are
+        cross-referenceable with `var/logs/ticks.jsonl` by name alone.
         """
         try:
             ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
-            ts_compact = result.ts.strftime("%Y%m%dT%H%M%S_%f")
             verdict = "ok" if result.success else "fail"
-            cap_dir = ARTIFACTS_DIR / (
-                f"{ts_compact}_{verdict}_{uuid.uuid4().hex[:8]}"
-            )
+            cap_dir = ARTIFACTS_DIR / f"{correlation_id}_{verdict}_{tier}"
             cap_dir.mkdir(parents=True, exist_ok=True)
 
             metadata: dict[str, Any] = {
+                "correlation_id": correlation_id,
+                "tier": tier,
                 "tick": dict(result.to_debug_dict()),
                 "template": {
                     "name": self.template.name,

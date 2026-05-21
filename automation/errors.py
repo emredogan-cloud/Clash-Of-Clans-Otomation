@@ -173,3 +173,46 @@ class ValidationError(OrchestratorError):
     surface via `TickResult.success=False`. Future phases that want
     raising semantics can opt in.
     """
+
+
+# ---------------------------------------------------------------------------
+# Observability / Telemetry (Phase 6)
+# ---------------------------------------------------------------------------
+
+
+class TelemetryError(AutomationError):
+    """Base class for errors raised inside the observability stack."""
+
+
+class MetricsError(TelemetryError):
+    """A metrics observation or persistence failed.
+
+    Raised when a metric is observed against a malformed configuration
+    (e.g. negative latency where a histogram requires non-negative
+    samples) or when an atomic write of the metrics JSON file fails
+    in a way the collector cannot recover from. Routine I/O failures
+    are logged at WARN and swallowed; this exception is reserved for
+    structural faults the caller must address.
+    """
+
+
+class LoggingError(TelemetryError):
+    """A structured-log write failed structurally.
+
+    Logging is best-effort by default — JSONL append errors log a
+    WARN and the framework continues. This exception is for the
+    narrow cases the caller actually needs to react to (e.g. a
+    `log_tick()` invocation with a non-JSON-serialisable field
+    raised by the encoder).
+    """
+
+
+class RotationError(TelemetryError):
+    """A rotation pass could not enforce its cap.
+
+    Raised when `RotationPolicy.rotate_logs()` or
+    `rotate_artifacts()` cannot read or delete entries it owns
+    (permission denied, race with another process). The caller
+    decides whether to surface or swallow; routine empty/missing
+    directories are not errors.
+    """
