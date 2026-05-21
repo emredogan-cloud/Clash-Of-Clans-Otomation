@@ -216,3 +216,40 @@ class RotationError(TelemetryError):
     decides whether to surface or swallow; routine empty/missing
     directories are not errors.
     """
+
+
+# ---------------------------------------------------------------------------
+# Hardening / Watchdog (Phase 7)
+# ---------------------------------------------------------------------------
+
+
+class WatchdogError(AutomationError):
+    """Base class for errors raised by the hardening / watchdog layer."""
+
+
+class TimeoutFault(WatchdogError):
+    """A tick exceeded its tier-specific timeout budget.
+
+    Raised — or attached to a synthetic `TickResult` — by the
+    `Watchdog` when an orchestrator tick takes longer than the
+    budget defined for its derived tier
+    (`search_only` / `validated` / `validated_retry`).
+
+    Phase 7 enforces timeouts *post hoc* (measured after the tick
+    completes). The lower layers (`ADB.shell`, `Sensor.capture`,
+    `Actuator.tap`) own pre-emptive timeouts via `subprocess.run
+    timeout=...`. Any truly hung Python-level path is not pre-empted
+    in v1.0 — that would require a thread / SIGALRM and is
+    explicitly out of Phase 7 scope.
+    """
+
+
+class RecoveryError(WatchdogError):
+    """Recovery could not complete its best-effort steps.
+
+    Raised when `RecoveryManager.recover()` itself errors (e.g.,
+    cannot read the orchestrator's state, cannot reach the ADB
+    layer for a re-check). The watchdog catches this and continues
+    — the framework cannot crash on a recovery fault. Phase 7
+    recovery is best-effort by design.
+    """

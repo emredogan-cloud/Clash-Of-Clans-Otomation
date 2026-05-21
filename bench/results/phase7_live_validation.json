@@ -1,0 +1,64 @@
+{
+  "counters_final": {
+    "actions_total": 0,
+    "matches_total": 2,
+    "retries_total": 0,
+    "ticks_failed": 2,
+    "ticks_success": 0,
+    "ticks_total": 2,
+    "validation_ticks": 0
+  },
+  "overhead": {
+    "approx_pct_of_1s_tick": 0.0017285499999999997,
+    "mean_ms": 0.017923294000000003,
+    "median_ms": 0.0172855,
+    "n_iterations": 500,
+    "p95_ms": 0.02454
+  },
+  "scenario_1_normal_supervised": {
+    "health": {
+      "actuator_ok": true,
+      "degraded": false,
+      "last_error": null,
+      "matcher_ok": true,
+      "orchestrator_ok": true,
+      "sensor_ok": true,
+      "ts": "2026-05-21T09:51:26.346729+00:00"
+    },
+    "scenario": "normal_supervised_tick",
+    "state_after": "FAILED",
+    "tick_latency_ms": 1378.347141,
+    "tick_success": false
+  },
+  "scenario_2_forced_timeout": {
+    "budget_ms": 200,
+    "health": {
+      "actuator_ok": true,
+      "degraded": true,
+      "last_error": "TimeoutFault: tick 983.70 ms exceeded search_only budget 200 ms",
+      "matcher_ok": true,
+      "orchestrator_ok": true,
+      "sensor_ok": true,
+      "ts": "2026-05-21T09:51:28.712867+00:00"
+    },
+    "scenario": "forced_timeout",
+    "tick_latency_ms": 981.704441,
+    "timeout_flagged": true
+  },
+  "scenario_3_forced_recovery": {
+    "health": {
+      "actuator_ok": true,
+      "degraded": true,
+      "last_error": "InvalidTransitionError: tick() requires state=IDLE, got state=SEARCHING; call reset() first",
+      "matcher_ok": true,
+      "orchestrator_ok": true,
+      "sensor_ok": true,
+      "ts": "2026-05-21T09:51:28.717157+00:00"
+    },
+    "post_recovery_state": "IDLE",
+    "pre_tick_state": "SEARCHING",
+    "scenario": "forced_recovery",
+    "state_after": "FAILED",
+    "tick_success": false
+  }
+}
