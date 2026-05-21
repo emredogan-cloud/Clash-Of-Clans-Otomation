@@ -481,3 +481,90 @@ def test_artifact_write_failure_does_not_break_run_tick(
     wd = Watchdog(orch, debug=True)  # type: ignore[arg-type]
     r = wd.run_tick()
     assert r.success is True
+
+
+# =============================================================================
+# Phase 8B: heartbeat wiring
+# =============================================================================
+
+
+@dataclass
+class _CaptureHeartbeat:
+    """Fake `HeartbeatWriter` recording every `beat()` call."""
+
+    calls: list[tuple[str, object]] = field(default_factory=list)
+    raise_on_beat: bool = False
+
+    def beat(self, correlation_id, runtime_health, *, ts=None):  # type: ignore[no-untyped-def]
+        if self.raise_on_beat:
+            raise RuntimeError("synthetic beat failure")
+        self.calls.append((correlation_id, runtime_health))
+
+
+def test_phase8b_heartbeat_called_after_successful_tick() -> None:
+    orch = _MockOrchestrator(canned_result=_ok_result())
+    hb = _CaptureHeartbeat()
+    wd = Watchdog(orch, heartbeat=hb)  # type: ignore[arg-type]
+    wd.run_tick()
+    assert len(hb.calls) == 1
+    cid, health = hb.calls[0]
+    assert cid.startswith("tick_")
+    assert health is wd.last_health
+
+
+def test_phase8b_heartbeat_called_after_failed_tick() -> None:
+    orch = _MockOrchestrator(raise_on_tick=CaptureError("x"))
+    hb = _CaptureHeartbeat()
+    wd = Watchdog(orch, heartbeat=hb)  # type: ignore[arg-type]
+    wd.run_tick()
+    # Heartbeat still written so the L2 watchdog sees the degraded
+    # health rather than nothing.
+    assert len(hb.calls) == 1
+    cid, health = hb.calls[0]
+    assert cid.startswith("tick_")
+    assert health.degraded is True
+
+
+def test_phase8b_correlation_id_unique_per_tick() -> None:
+    orch = _MockOrchestrator(canned_result=_ok_result())
+    hb = _CaptureHeartbeat()
+    wd = Watchdog(orch, heartbeat=hb)  # type: ignore[arg-type]
+    wd.run_tick()
+    wd.run_tick()
+    wd.run_tick()
+    assert len(hb.calls) == 3
+    cids = [cid for cid, _ in hb.calls]
+    assert len(set(cids)) == 3  # all distinct
+
+
+def test_phase8b_heartbeat_failure_does_not_break_run_tick() -> None:
+    """A failing heartbeat write must not affect the supervised TickResult."""
+    orch = _MockOrchestrator(canned_result=_ok_result())
+    hb = _CaptureHeartbeat(raise_on_beat=True)
+    wd = Watchdog(orch, heartbeat=hb)  # type: ignore[arg-type]
+    r = wd.run_tick()
+    assert r.success is True
+
+
+def test_phase8b_no_heartbeat_when_argument_is_none() -> None:
+    """If no heartbeat is wired, no auto-write happens — Phase-7 behaviour."""
+    orch = _MockOrchestrator(canned_result=_ok_result())
+    wd = Watchdog(orch, heartbeat=None)  # type: ignore[arg-type]
+    wd.run_tick()
+    # Just verifies construction + run with `heartbeat=None` does not raise.
+
+
+def test_phase8b_heartbeat_receives_post_recovery_health() -> None:
+    """When recovery runs, the heartbeat carries the post-recovery health."""
+    orch = _MockOrchestrator(raise_on_tick=CaptureError("x"))
+    recovery_health = RuntimeHealth(
+        sensor_ok=True, matcher_ok=True, actuator_ok=True,
+        orchestrator_ok=True, last_error="CaptureError: x",
+        degraded=True, ts=_dt.datetime.now(tz=_UTC),
+    )
+    rec = _MockRecovery(health_to_return=recovery_health)
+    hb = _CaptureHeartbeat()
+    wd = Watchdog(orch, recovery=rec, heartbeat=hb)  # type: ignore[arg-type]
+    wd.run_tick()
+    _, health = hb.calls[0]
+    assert health is recovery_health  # republished from recovery

@@ -283,3 +283,21 @@ class ExternalWatchdogError(AutomationError):
     classified as `MISSING` or `INVALID` and reported via the
     `WatchdogStatus.recommendation` channel.
     """
+
+
+# ---------------------------------------------------------------------------
+# L2 action layer (Phase 8B)
+# ---------------------------------------------------------------------------
+
+
+class WatchdogActionError(AutomationError):
+    """A structural fault inside the L2 action executor.
+
+    Raised by `watchdog.action.WatchdogActionExecutor` and
+    `RestartLimiter` only for **caller bugs** — a malformed
+    command list, a non-positive `max_restarts`, a non-Path
+    log path. Routine subprocess failures (pkill exit non-zero,
+    relaunch command missing) are NOT raised; they are recorded
+    in the returned `RestartActionResult` so the operator can
+    see what happened without the framework crashing.
+    """

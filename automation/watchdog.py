@@ -62,6 +62,7 @@ from .tick_result import TickResult
 if TYPE_CHECKING:  # pragma: no cover — typing only
     from .orchestrator import Orchestrator
     from .recovery import RecoveryManager
+    from watchdog.heartbeat import HeartbeatWriter
 
 _LOG = logging.getLogger(__name__)
 
@@ -106,6 +107,14 @@ class Watchdog:
                               `recovery.recover(...)` once on any
                               fault. If `None`, no recovery is
                               attempted.
+    - `heartbeat`           : optional `watchdog.heartbeat.HeartbeatWriter`.
+                              **Phase 8B addition** — when supplied,
+                              every `run_tick()` writes one heartbeat
+                              record via `heartbeat.beat(correlation_id,
+                              last_health)` after the supervision is
+                              complete. Best-effort: a failed beat
+                              is logged at WARN and does NOT raise
+                              or affect the returned `TickResult`.
     - `timeout_budgets_ms`  : optional override for the per-tier
                               budgets. Defaults to
                               `DEFAULT_TIMEOUT_BUDGETS_MS`.
@@ -124,11 +133,13 @@ class Watchdog:
         orchestrator: "Orchestrator",
         *,
         recovery: "RecoveryManager | None" = None,
+        heartbeat: "HeartbeatWriter | None" = None,
         timeout_budgets_ms: dict[str, int] | None = None,
         debug: bool | None = None,
     ) -> None:
         self.orchestrator: "Orchestrator" = orchestrator
         self.recovery: "RecoveryManager | None" = recovery
+        self.heartbeat: "HeartbeatWriter | None" = heartbeat
         self.timeout_budgets_ms: dict[str, int] = (
             dict(timeout_budgets_ms)
             if timeout_budgets_ms is not None
@@ -270,6 +281,28 @@ class Watchdog:
                 recovery_health=recovery_health,
                 returned_result=returned_result,
             )
+
+        # Phase 8B: auto-write a heartbeat record after each
+        # supervised tick. Best-effort — a failed beat is logged at
+        # WARN by `HeartbeatWriter.beat()` and never surfaces here.
+        # The recommendation-emitting external L2 watchdog
+        # (`watchdog/watchdog.py`) reads this beacon.
+        if self.heartbeat is not None:
+            try:
+                self.heartbeat.beat(
+                    correlation_id=correlation_id,
+                    runtime_health=self._last_health,
+                )
+            except Exception as exc:  # noqa: BLE001
+                # `HeartbeatWriter.beat` only raises on caller
+                # bugs (HeartbeatError). Routine I/O is already
+                # swallowed inside the writer. Containment is
+                # still mandatory: a heartbeat failure cannot
+                # corrupt the supervised tick's outcome.
+                _LOG.warning(
+                    "watchdog[%s]: heartbeat.beat() raised %s: %s "
+                    "(swallowed)", correlation_id, type(exc).__name__, exc,
+                )
 
         return returned_result
 

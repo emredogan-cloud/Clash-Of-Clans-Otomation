@@ -20,4 +20,4 @@ the whole point. `watchdog/heartbeat.py` is also stdlib-only;
 it duck-types the runtime-health argument (any object with
 `to_debug_dict()`) to avoid a runtime import.
 """
-__all__ = ["heartbeat", "watchdog"]
+__all__ = ["heartbeat", "watchdog", "action"]

@@ -1,0 +1,47 @@
+{
+  "restart_log_lines": 3,
+  "scenario_1_heartbeat_auto_write": {
+    "first_beat_correlation_id": "tick_20260521T103937_c40631",
+    "heartbeat_path": "/home/emre/Downloads/Clash-Of-Clans-Otomation/var/watchdog/heartbeat.json"
+  },
+  "scenario_2_l2_healthy": {
+    "age_s": 0.02618,
+    "recommendation": "none",
+    "status": "HEALTHY",
+    "ts": "2026-05-21T10:39:38.903097+00:00"
+  },
+  "scenario_3_l2_stale": {
+    "age_s": 2.026402,
+    "recommendation": "RESET_LITE",
+    "status": "STALE",
+    "ts": "2026-05-21T10:39:40.903319+00:00"
+  },
+  "scenario_4_executor_reset_lite": {
+    "action_type": "RESET_LITE",
+    "attempted": true,
+    "blocked": false,
+    "notes": null,
+    "primary_exit_code": 0,
+    "primary_stderr": null,
+    "recent_restart_count": 1,
+    "relaunch_exit_code": null,
+    "relaunched": false,
+    "ts": "2026-05-21T10:39:41.236027+00:00"
+  },
+  "scenario_5_rate_limiter_block": {
+    "action_type": "RESET_LITE",
+    "attempted": false,
+    "blocked": true,
+    "notes": "rate-limited: 3 restarts in last 300s \u2265 max=3",
+    "primary_exit_code": null,
+    "primary_stderr": null,
+    "recent_restart_count": 3,
+    "relaunch_exit_code": null,
+    "relaunched": false,
+    "ts": "2026-05-21T10:39:43.098078+00:00"
+  },
+  "scenario_6_runtime_survives": {
+    "final_beat_correlation_id": "tick_20260521T103943_b43374",
+    "final_tick_summary": "TickResult(FAIL IDLE\u2192FAILED tick=1126.2 ms capture=1084.4 match=40.63 action=\u2014)"
+  }
+}
